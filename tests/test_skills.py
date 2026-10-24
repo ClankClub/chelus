@@ -445,6 +445,9 @@ class TelegramSkillTests(unittest.TestCase):
         self.factory = Factory(self.s, "k", self.store, OWNER)
         bot = FakeBot(script)
         bridge = telegram.Bridge(self.s, bot, OWNER, self.factory, log=lambda *a: None, guests=set(guests))
+        # These tests assert skill/approval bodies, not host-dependent telemetry;
+        # footer coverage for the same surfaces lives in test_telegram.
+        bridge.stats.footer = lambda fields=(): ""
         with self.assertRaises(KeyboardInterrupt):
             bridge.run_forever()
         return bot, model

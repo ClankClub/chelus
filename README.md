@@ -81,6 +81,42 @@ The bot answers only your user ID in a private chat and drops everything else un
 
 Risky tools ask for approval with a card in plain language: what the action is, Chelys's reason in her own words, and the facts (the command, or the file and its size). An unanswered request counts as Deny after 3 minutes. Replies list the tools used. `/new` starts a fresh conversation and `/help` shows the commands. The skill commands are `/learn [what]`, `/skills`, `/pending` and `/undo NAME` (see Skills below). If DeepSeek stays down after the normal retries, the bot posts a countdown and tries again up to 5 times, 15 to 60 seconds apart; `/stop` cancels the wait. The Telegram conversation is separate from terminal chat and survives restarts.
 
+### Runtime stats
+
+A runtime footer is **on by default** for every allowed owner/guest private chat, for example:
+
+```text
+mem 1.2/1.7G | cpu 3.9% - 30°C | bat 89% - 27°C
+```
+
+The default fields are `mem`, `cpu`, `bat`, in that order. `mem` is RAM **used/total** (`MemTotal - MemAvailable` over `MemTotal`). Memory ratios use GiB (`G`, 2^30 bytes), at most one decimal; leading zeroes are kept and redundant `.0` is omitted. CPU percentage has at most one decimal; battery percentage and both temperatures are rounded integers. Failed, absent, denied, malformed or stale metrics are omitted independently, never replaced with invented zeroes. A valid percentage or temperature can appear by itself if the other reading is unavailable.
+
+Optional fields are `swap` (for example `swap 1.2/1.5G`, used = `SwapTotal - SwapFree`), `up` (`up 15h10`, whole device-uptime hours and minutes), and `disk` (`disk 4.7/22.8G`). Uptime comes only from the helper's `uptime_seconds`, never Python process lifetime or denied Termux `/proc/uptime`. Disk uses one cached `os.statvfs(Settings.workdir or Path.home())` call, only when selected or on explicit `/stats info`: used = `(f_blocks - f_bfree) * f_frsize`, total = `f_blocks * f_frsize`, converted from bytes to GiB. This is the actual containing filesystem, **not** the phone's advertised capacity; no user files are walked. A genuine zero-size swap displays `swap 0/0G`.
+
+- `/stats` toggles the footer and reports the resulting state.
+- `/stats on` and `/stats off` explicitly set it for **this chat only**.
+- `/stats add swap up disk` appends optional fields in the requested order; duplicates are ignored. All allowed fields are `mem cpu bat swap up disk`.
+- `/stats remove cpu` removes one or more fields. Removing every field leaves no footer, even when enabled. Re-adding default fields restores their `mem cpu bat` order before optional fields.
+- `/stats reset` restores `mem cpu bat` and turns the footer on.
+- `/stats info` shows current telemetry, state, data sources, formulas and unavailable-counter explanations without toggling, even when the footer is off.
+
+Preferences survive bridge restarts and `/new`. They live in `telegram_stats.json` under `Settings.data_dir` (normally `~/.local/share/chelys/`, overridable with `CHELYS_DATA_DIR`), as chat ID to `{"enabled": true, "fields": ["mem", "cpu", "bat"]}` records, atomically replaced with mode `0600`. Existing chat ID to boolean files are read without changing enabled flags; legacy entries receive the new default fields and migrate on the next successful save. Invalid commands/fields do not write state. A failed save reports failure and leaves disk and in-memory preferences unchanged; unreadable/corrupt preferences fall back to default on/default fields, with an explanation in `/stats info`. Allowed guests can control only their own private-chat preferences under the existing authorization gate.
+
+Stats are added by the Telegram bridge, not by the model or a tool. Neither footer text nor `/stats` messages enter model context or conversation history. Local reads are cached for about five seconds using a monotonic clock; no Python background worker or extra dependency is used. Each outgoing chunk gets its own footer (except `/stats info`, which already contains telemetry), with space reserved inside the 4000 UTF-16-unit limit, preserving all reply characters, including newlines. Approval prompts, edits, commands, errors and outage notices use the same formatting path (Telegram callback toast notifications do not get a footer).
+
+### Optional telemetry cache on Android
+
+Termux may be denied `/proc/stat`, `/proc/uptime` and CPU thermal sensors. Chelys does **not** invoke or install ADB, spawn subprocesses, call Termux:API, run privileged commands, or substitute battery temperature for CPU temperature in its stats path. An operator can optionally start [scripts/chelys-telemetry.sh](scripts/chelys-telemetry.sh) from an already-authorized **ADB shell**, without root. This separate per-boot sampler reads aggregate CPU utilization and the thermal HAL's CPU-class sensor (`mType=0`, named `AP` on the target phone). It atomically publishes world-readable telemetry at `/data/local/tmp/chelys-telemetry.json`; it accepts no commands from Chelys. The backward-compatible version-1 cache reader also accepts `battery_percent`, `battery_temp_c` (from `dumpsys battery`, independent of CPU temperature), and `uptime_seconds` when supplied by the helper.
+
+Manual setup from a computer with authorized ADB access:
+
+```sh
+adb push scripts/chelys-telemetry.sh /data/local/tmp/chelys-telemetry.sh
+adb shell 'chmod 700 /data/local/tmp/chelys-telemetry.sh; nohup setsid /system/bin/sh /data/local/tmp/chelys-telemetry.sh > /data/local/tmp/chelys-telemetry.log 2>&1 < /dev/null &'
+```
+
+This does **not** install a service or automatic reboot startup. The sampler stops at reboot and must be started manually again; RAM/swap/disk do not depend on it. The bridge only reads the optional cache and validates version `1`, numeric finite timestamps no older than 30 seconds (up to five seconds of future clock tolerance), CPU percentage in `0..100`, CPU temperature in `-20..150°C`, battery percentage in `0..100`, battery temperature in `-20..100°C`, and finite nonnegative device uptime in seconds. Booleans and numeric strings are not numbers. Null, invalid, missing, denied or stale metrics are omitted independently, including when an older helper supplies only CPU fields. `/stats info` identifies sources and raw readings; it does not imply direct Termux sensor access.
+
 The bridge runs only while that Termux session is alive, and Android may kill Termux in the background. `termux-wake-lock` and turning off battery optimization for Termux help, but neither is a guarantee. Running unattended has not been tested yet.
 
 To run it detached from an SSH session and log to a file:

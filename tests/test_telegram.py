@@ -4,8 +4,13 @@ from __future__ import annotations
 
 import json
 import tempfile
+import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
+
+MEMINFO = "MemTotal: 1748992 kB\nMemAvailable: 520192 kB\nSwapTotal: 1572864 kB\nSwapFree: 958464 kB\n"
+FOOTER = "mem 1.2/1.7G"
 
 from chelys import provider, telegram
 from chelys.config import ConfigError
@@ -73,7 +78,7 @@ class BridgeTests(unittest.TestCase):
         self.store.close()
         self._tmp.cleanup()
 
-    def run_bridge(self, script, replies, guests=()):
+    def run_bridge(self, script, replies, guests=(), meminfo="", cpu_sample=""):
         model = FakeModel(replies)
 
         class Factory(telegram.AgentFactory):
@@ -84,10 +89,188 @@ class BridgeTests(unittest.TestCase):
 
         self.factory = Factory(self.s, "k", self.store, OWNER)
         bot = FakeBot(script)
-        bridge = telegram.Bridge(self.s, bot, OWNER, self.factory, log=lambda *a: None, guests=set(guests))
-        with self.assertRaises(KeyboardInterrupt):
+        logs = []
+        bridge = telegram.Bridge(self.s, bot, OWNER, self.factory, log=logs.append, guests=set(guests))
+        read_text = Path.read_text
+        def read(path, *args, **kwargs):
+            if str(path) == "/proc/meminfo":
+                return meminfo
+            if str(path) == "/data/local/tmp/chelys-telemetry.json":
+                return cpu_sample
+            return read_text(path, *args, **kwargs)
+        with patch.object(Path, "read_text", read), self.assertRaises(KeyboardInterrupt):
             bridge.run_forever()
+        self.assertFalse([line for line in logs if "unexpected" in line], logs)
+        self.assertEqual(model.replies, [], "all scripted model replies must be consumed")
         return bot, model, bridge
+
+    def test_skill_commands_and_guest_help_keep_runtime_footer(self):
+        bot, model, _ = self.run_bridge([[msg(1, OWNER, "/skills"), msg(2, OWNER, "/pending"),
+                                         msg(3, GUEST, "/skills"), msg(4, GUEST, "/help")]], [],
+                                       guests={GUEST}, meminfo=MEMINFO)
+        self.assertTrue(all(t.endswith(FOOTER) for t in bot.texts()), bot.texts())
+        self.assertIn("/stats", bot.texts()[-1])
+        self.assertNotIn("/learn", bot.texts()[-1])
+        self.assertEqual(model.calls, [])
+
+    def test_pending_skill_card_keeps_footer_and_buttons(self):
+        bot = FakeBot([])
+        factory = telegram.AgentFactory(self.s, "k", self.store, OWNER)
+        bridge = telegram.Bridge(self.s, bot, OWNER, factory)
+        bridge.stats.footer = lambda fields: FOOTER
+        with patch("chelys.telegram.skill_tools.pending_card", return_value="Skill change"):
+            bridge.send_pending(OWNER, [{"id": "synthetic"}])
+        self.assertEqual(bot.texts(), ["Skill change\n\n" + FOOTER])
+        self.assertTrue(any("reply_markup" in params for method, params in bot.sent))
+
+    def test_runtime_footer_default_owner_and_guest(self):
+        bot, model, _ = self.run_bridge(
+            [[msg(1, OWNER, "hi"), msg(2, GUEST, "hello")]],
+            [{"role": "assistant", "content": "hello"}] * 2,
+            guests={GUEST}, meminfo=MEMINFO)
+        self.assertEqual(bot.texts(), ["hello\n\n" + FOOTER] * 2)
+        self.assertEqual(len(model.calls), 2)
+
+    def test_stats_controls_persist_per_chat_without_model_history(self):
+        commands = ["/stats", "/stats on", "/stats off", "/new", "/stats info"]
+        bot, model, _ = self.run_bridge([[msg(i, OWNER, t) for i, t in enumerate(commands, 1)]
+                                        + [msg(10, GUEST, "/stats off"), msg(11, OWNER, "hi")]],
+                                       [{"role": "assistant", "content": "hello"}],
+                                       guests={GUEST}, meminfo=MEMINFO)
+        self.assertEqual(bot.texts()[0], "Stats off.")
+        self.assertEqual(bot.texts()[1], "Stats on.\n\n" + FOOTER)
+        self.assertEqual(bot.texts()[2], "Stats off.")
+        self.assertIn("Stats off.", bot.texts()[4])
+        self.assertIn("MemTotal - MemAvailable", bot.texts()[4])
+        self.assertIn(FOOTER, bot.texts()[4])
+        self.assertEqual(len(model.calls), 1)
+        self.assertNotIn("/stats", json.dumps(model.calls))
+        self.assertNotIn(FOOTER, json.dumps(model.calls))
+        state = self.s.data_dir / "telegram_stats.json"
+        self.assertEqual(json.loads(state.read_text()), {
+            str(chat): {"enabled": False, "fields": ["mem", "cpu", "bat"]}
+            for chat in (OWNER, GUEST)})
+        self.assertEqual(state.stat().st_mode & 0o777, 0o600)
+        bot, _, _ = self.run_bridge([[msg(12, OWNER, "again"), msg(13, GUEST, "/stats")]],
+                                    [{"role": "assistant", "content": "again"}], guests={GUEST}, meminfo=MEMINFO)
+        self.assertEqual(bot.texts(), ["again", "Stats on.\n\n" + FOOTER])
+
+    def test_stats_field_controls_are_local_persistent_and_resettable(self):
+        commands = ["/stats add swap up disk", "/stats remove cpu", "/stats info", "/stats off",
+                    "/stats reset", "/stats remove mem cpu bat", "/stats info"]
+        with patch("chelys.stats.os.statvfs", side_effect=PermissionError("denied")):
+            bot, model, bridge = self.run_bridge([[msg(i, OWNER, t) for i, t in enumerate(commands, 1)]
+                                                 + [msg(20, GUEST, "/stats add swap")]], [],
+                                                 guests={GUEST}, meminfo=MEMINFO)
+        self.assertIn(FOOTER + " | swap 0.6/1.5G", bot.texts()[0])
+        self.assertIn("Selected fields: mem, bat, swap, up, disk", bot.texts()[2])
+        self.assertEqual(bot.texts()[3], "Stats off.")
+        self.assertEqual(bot.texts()[4], "Stats on. Fields: mem, cpu, bat.\n\n" + FOOTER)
+        self.assertEqual(bot.texts()[5], "Stats on. Fields: none.")
+        self.assertIn("Selected fields: none", bot.texts()[6])
+        self.assertEqual(bridge.stats_preferences.fields(OWNER), ())
+        self.assertEqual(bridge.stats_preferences.fields(GUEST), ("mem", "cpu", "bat", "swap"))
+        self.assertEqual(model.calls, [])
+        self.assertEqual(self.store.messages(self.factory.session_for(OWNER)), [])
+        self.assertEqual(telegram.StatsPreferences(self.s.data_dir).fields(OWNER), ())
+
+    def test_invalid_stats_field_commands_do_not_write(self):
+        commands = ["/stats add", "/stats remove", "/stats add swap nope", "/stats reset cpu",
+                    "/stats remove cpu 1111", "/stats unknown", "/stats on cpu"]
+        bot, model, _ = self.run_bridge([[msg(i, GUEST, t) for i, t in enumerate(commands, 1)]], [],
+                                       guests={GUEST}, meminfo=MEMINFO)
+        self.assertTrue(all("Usage:" in t for t in bot.texts()))
+        self.assertFalse((self.s.data_dir / "telegram_stats.json").exists())
+        self.assertEqual(model.calls, [])
+
+    def test_footer_commands_errors_approval_edits_and_outage(self):
+        target = self.tmp / "approved.txt"
+        bot, model, bridge = self.run_bridge([
+            [msg(1, OWNER, "/help"), msg(2, OWNER, "write")], press(OWNER, "ok"),
+            [msg(3, OWNER, "fail")]], [
+                {"role": "assistant", "content": None, "tool_calls": [tool_call("write_file", {"path": str(target), "content": "x"})]},
+                {"role": "assistant", "content": "done"}, provider.ProviderError("bad key")], meminfo=MEMINFO)
+        self.assertTrue(all(t.endswith(FOOTER) for t in bot.texts()))
+        edits = [p["text"] for method, p in bot.sent if method == "editMessageText"]
+        self.assertEqual(len(edits), 1)
+        self.assertTrue(edits[0].endswith(FOOTER))
+        bridge.wait_out(OWNER, OWNER, 0, 1, 5, "down")
+        self.assertTrue(bot.texts()[-1].endswith(FOOTER))
+        self.assertNotIn(FOOTER, json.dumps(model.calls))
+        self.assertNotIn(FOOTER, json.dumps(self.store.messages(self.factory.session_for(OWNER))))
+
+    def test_stats_info_explains_missing_metrics_without_toggle(self):
+        bot, model, _ = self.run_bridge([[msg(1, OWNER, "/stats info"), msg(2, OWNER, "/stats")]], [])
+        self.assertIn("RAM unavailable", bot.texts()[0])
+        self.assertIn("Swap unavailable", bot.texts()[0])
+        self.assertIn("Stats on.", bot.texts()[0])
+        self.assertEqual(bot.texts()[1], "Stats off.")
+        self.assertEqual(model.calls, [])
+
+    def test_long_footer_chunks_preserve_body_and_limits(self):
+        text = "a" * 3950 + "\n\n\n" + "😀" * 4100 + "\n\nend\n"
+        bot, _, _ = self.run_bridge([[msg(1, OWNER, "long")]],
+                                   [{"role": "assistant", "content": text}], meminfo=MEMINFO)
+        suffix = "\n\n" + FOOTER
+        self.assertTrue(all(t.endswith(suffix) for t in bot.texts()))
+        self.assertTrue(all(len(t.encode("utf-16-le")) // 2 <= telegram.MAX_TEXT for t in bot.texts()))
+        self.assertEqual("".join(t[:-len(suffix)] for t in bot.texts()), text)
+
+    def test_stats_save_failure_reports_unchanged(self):
+        with patch("chelys.stats.os.replace", side_effect=PermissionError("denied")):
+            bot, model, bridge = self.run_bridge([[msg(1, OWNER, "/stats off")]], [], meminfo=MEMINFO)
+        self.assertIn("Could not save", bot.texts()[0])
+        self.assertIn("unchanged", bot.texts()[0])
+        self.assertTrue(bridge.stats_preferences.enabled(OWNER))
+        self.assertEqual(model.calls, [])
+
+    def test_stats_authorization_and_guest_cannot_target_other_chat(self):
+        bot, model, _ = self.run_bridge([[msg(1, STRANGER, "/stats off"), msg(2, OWNER, "/stats off", "group"),
+                                         msg(3, GUEST, f"/stats off {OWNER}"), msg(4, OWNER, "/stats info")]], [],
+                                       guests={GUEST}, meminfo=MEMINFO)
+        self.assertEqual(len(bot.texts()), 2)
+        self.assertIn("Usage:", bot.texts()[0])
+        self.assertIn("Stats on.", bot.texts()[1])
+        self.assertEqual(model.calls, [])
+        self.assertFalse((self.s.data_dir / "telegram_stats.json").exists())
+
+    def test_long_approval_edit_preserves_all_content_with_footer(self):
+        bot = FakeBot([press(OWNER, "ok")])
+        bridge = telegram.Bridge(self.s, bot, OWNER, None)
+        summary = "😀" * 4200 + "\n\nend"
+        with patch.object(Path, "read_text", return_value=MEMINFO):
+            self.assertTrue(bridge.approve(OWNER, summary))
+        suffix = "\n\n" + FOOTER
+        edits = [p["text"] for method, p in bot.sent if method == "editMessageText"]
+        all_payloads = bot.texts() + edits
+        self.assertTrue(all(len(t.encode("utf-16-le")) // 2 <= telegram.MAX_TEXT for t in all_payloads))
+        approved = edits + [p["text"] for method, p in bot.sent
+                            if method == "sendMessage" and "reply_markup" not in p]
+        self.assertEqual("".join(t[:-len(suffix)] for t in approved), "Allowed once: " + summary)
+
+    def test_cpu_cache_file_reaches_footer_not_model_or_history(self):
+        cache = self.tmp / "synthetic-telemetry.json"
+        cache.write_text(json.dumps({"version": 1, "timestamp": time.time(), "cpu_percent": 12.5, "cpu_temp_c": 31.2}))
+        with patch("chelys.stats.CPU_CACHE_PATH", cache):
+            bot, model, _ = self.run_bridge([[msg(1, OWNER, "hi"), msg(2, OWNER, "/stats off"),
+                                             msg(3, OWNER, "/stats info")]],
+                                           [{"role": "assistant", "content": "hello"}], meminfo=MEMINFO)
+        self.assertEqual(bot.texts()[0], "hello\n\n" + FOOTER + " | cpu 12.5% - 31°C")
+        self.assertEqual(bot.texts()[1], "Stats off.")
+        self.assertIn("12.5%", bot.texts()[2])
+        self.assertIn("privileged", bot.texts()[2])
+        self.assertNotIn("CPU", json.dumps(model.calls))
+        self.assertNotIn(FOOTER, json.dumps(self.store.messages(self.factory.session_for(OWNER))))
+
+    def test_help_lists_stats_controls(self):
+        bot, model, _ = self.run_bridge([[msg(1, OWNER, "/help")]], [])
+        self.assertIn("/stats", bot.texts()[0])
+        self.assertIn("on|off|info", bot.texts()[0])
+        self.assertEqual(model.calls, [])
+
+    def test_stats_info_does_not_duplicate_telemetry(self):
+        bot, _, _ = self.run_bridge([[msg(1, OWNER, "/stats info")]], [], meminfo=MEMINFO)
+        self.assertEqual(bot.texts()[0].count(FOOTER), 1)
 
     def test_guest_chats_in_own_conversation(self):
         bot, model, _ = self.run_bridge([[msg(1, OWNER, "I am the owner"), msg(2, GUEST, "hi from guest")]], [
