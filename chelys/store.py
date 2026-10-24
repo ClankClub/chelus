@@ -109,9 +109,8 @@ MIGRATIONS = {
 
 USAGE_FIELDS = ("calls", "prompt", "completion", "cache_hit", "cache_miss")
 
-# Hermes's turn lease lives 300 s and a timer renews it every 60 s. Chelys has no timer
-# thread and renews only between steps, and one step can include up to 3 provider retries,
-# so the lease lives longer. A holder whose process is gone is reclaimed at once.
+# A live local holder keeps ownership even across long provider retries. Dead PIDs
+# are reclaimed immediately; the TTL recovers legacy/unparseable holders only.
 LEASE_TTL_S = 600.0
 
 
@@ -262,14 +261,14 @@ class Store:
     # ---- turn lease ----
 
     def acquire_lease(self, session_id: int, holder: str, ttl: float = LEASE_TTL_S) -> None:
-        """Take the session for one turn, or raise SessionBusy. The lease is free when it is
-        unset, expired, already ours, or held by a process that no longer exists."""
+        """Take the session unless a live local process owns it. An expired timestamp
+        alone never evicts a live process; stop a hung holder explicitly."""
         now = time.time()
         with self.db:
             cur = self.db.execute(
                 """UPDATE sessions SET lease_holder = ?, lease_expires = ?
-                   WHERE id = ? AND (lease_holder IS NULL OR lease_expires < ? OR lease_holder = ?)""",
-                (holder, now + ttl, session_id, now, holder),
+                   WHERE id = ? AND (lease_holder IS NULL OR lease_holder = ?)""",
+                (holder, now + ttl, session_id, holder),
             )
         if cur.rowcount == 1:
             return
@@ -278,22 +277,24 @@ class Store:
             raise SessionBusy(f"no conversation #{session_id}")
         other, expires = row
         pid = _holder_pid(other)
-        if pid is not None and pid != os.getpid() and not _pid_alive(pid):
+        if (pid is not None and not _pid_alive(pid)) or (pid is None and expires < now):
             with self.db:
                 cur = self.db.execute(
-                    "UPDATE sessions SET lease_holder = ?, lease_expires = ? WHERE id = ? AND lease_holder = ?",
-                    (holder, now + ttl, session_id, other),
+                    "UPDATE sessions SET lease_holder = ?, lease_expires = ? "
+                    "WHERE id = ? AND lease_holder = ? AND lease_expires = ?",
+                    (holder, now + ttl, session_id, other, expires),
                 )
             if cur.rowcount == 1:
                 return
-        wait = max(0, int(expires - now))
         raise SessionBusy(f"conversation #{session_id} is busy with a turn in another Chelys process "
-                          f"({other}); try again shortly, or start a new conversation (lease ends in {wait}s at most)")
+                          f"({other}); wait, stop that process, or start a new conversation")
 
     def renew_lease(self, session_id: int, holder: str, ttl: float = LEASE_TTL_S) -> None:
         with self.db:
-            self.db.execute("UPDATE sessions SET lease_expires = ? WHERE id = ? AND lease_holder = ?",
-                            (time.time() + ttl, session_id, holder))
+            cur = self.db.execute("UPDATE sessions SET lease_expires = ? WHERE id = ? AND lease_holder = ?",
+                                  (time.time() + ttl, session_id, holder))
+            if cur.rowcount != 1:
+                raise SessionBusy(f"conversation #{session_id} lost turn ownership; no further actions were run")
 
     def release_lease(self, session_id: int, holder: str) -> None:
         with self.db:

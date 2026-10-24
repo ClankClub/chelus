@@ -254,7 +254,7 @@ def run(parent: Agent, kinds: tuple[str, ...] | None = None) -> Result:
                 break
         else:
             result.reply = f"(review hit its {MAX_STEPS}-step limit)"
-    except provider.ProviderError as e:
+    except (provider.ProviderError, SessionBusy) as e:
         result.reply = f"(review failed: {e})"
     finally:
         rev._lease = None

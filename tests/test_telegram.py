@@ -377,6 +377,40 @@ class BridgeTests(unittest.TestCase):
         ])
         self.assertEqual(bot.texts()[-2:], ["[used write_file]\nwritten", "hello back"])
 
+    def test_messages_after_approval_in_same_batch_are_preserved(self):
+        def clicked_then_messages(bot):
+            return press(OWNER, "ok")(bot) + [msg(1000, OWNER, "follow up"), msg(1001, GUEST, "hello")]
+
+        target = self.tmp / "batch.txt"
+        bot, model, _ = self.run_bridge([[msg(1, OWNER, "write it")], clicked_then_messages], [
+            {"role": "assistant", "content": None, "tool_calls": [
+                tool_call("write_file", {"path": str(target), "content": "x"})]},
+            {"role": "assistant", "content": "written"},
+            {"role": "assistant", "content": "owner reply"},
+            {"role": "assistant", "content": "guest reply"},
+        ], guests={GUEST})
+        self.assertEqual(bot.texts()[-3:], ["[used write_file]\nwritten", "owner reply", "guest reply"])
+        self.assertEqual(len(model.calls), 4)
+
+    def test_nested_approval_consumes_queued_batch_before_polling(self):
+        # The initial poll already contains the owner's follow-up before the later click.
+        target = self.tmp / "queued.txt"
+        bot, _, _ = self.run_bridge([
+            [msg(1, OWNER, "write it"), msg(2, OWNER, "follow up")], press(OWNER, "ok")], [
+            {"role": "assistant", "content": None, "tool_calls": [
+                tool_call("write_file", {"path": str(target), "content": "x"})]},
+            {"role": "assistant", "content": "written"},
+            {"role": "assistant", "content": "follow-up reply"},
+        ])
+        self.assertEqual(bot.texts()[-1], "follow-up reply")
+
+    def test_messages_after_stop_in_same_batch_are_preserved(self):
+        down = provider.ProviderError("HTTP 503", retryable=True, transient=True)
+        bot, _, _ = self.run_bridge([
+            [msg(1, OWNER, "hi")], [msg(2, OWNER, "/stop"), msg(3, OWNER, "try something else")]], [
+            down, {"role": "assistant", "content": "next reply"}])
+        self.assertEqual(bot.texts()[-1], "next reply")
+
     def test_new_and_help_commands(self):
         bot, model, _ = self.run_bridge([[msg(1, OWNER, "/help"), msg(2, OWNER, "/new")]], [])
         self.assertEqual(model.calls, [])

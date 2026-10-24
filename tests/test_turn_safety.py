@@ -165,9 +165,61 @@ class LeaseTests(Base):
         self.assertEqual(self.store.messages(self.sid), [])
         self.assertEqual(model.calls, [])
 
-    def test_expired_lease_is_taken_over(self):
-        self.store.acquire_lease(self.sid, f"pid={os.getpid()}:other", ttl=-1)
+    def test_expired_legacy_lease_is_taken_over(self):
+        self.store.acquire_lease(self.sid, "legacy-holder", ttl=-1)
         self.assertEqual(self.agent(FakeModel([{"role": "assistant", "content": "ok"}])).run_turn("hi"), "ok")
+
+    def test_live_holder_keeps_lease_through_long_provider_retries(self):
+        other = Store(self.s.db_path)
+        self.addCleanup(other.close)
+        def slow_model(*args, **kw):
+            with mock.patch("chelys.store.time.time", return_value=time.time() + 2000):
+                with self.assertRaises(SessionBusy):
+                    other.acquire_lease(self.sid, f"pid={os.getpid()}:contender")
+            return {"role": "assistant", "content": "still mine"}
+        self.assertEqual(self.agent(slow_model).run_turn("slow request"), "still mine")
+
+    def test_renewal_detects_lost_ownership(self):
+        self.store.acquire_lease(self.sid, "original")
+        self.store.release_lease(self.sid, "original")
+        self.store.acquire_lease(self.sid, "replacement")
+        with self.assertRaises(SessionBusy):
+            self.store.renew_lease(self.sid, "original")
+
+    def test_lost_lease_during_approval_prevents_file_write(self):
+        target = self.tmp / "must-not-exist"
+        def approve(req):
+            with self.store.db:
+                self.store.db.execute("UPDATE sessions SET lease_holder = 'replacement' WHERE id = ?", (self.sid,))
+            return True
+        model = FakeModel([{"role": "assistant", "content": None, "tool_calls": [
+            tool_call("write_file", {"path": str(target), "content": "wrong owner"})]},
+            {"role": "assistant", "content": "done"}])
+        with self.assertRaises(SessionBusy):
+            self.agent(model, approve=approve).run_turn("write")
+        self.assertFalse(target.exists())
+        self.assertEqual([m["role"] for m in self.store.messages(self.sid)], ["user", "assistant"])
+
+    def test_lost_lease_after_model_response_prevents_history_write(self):
+        def model(*args, **kw):
+            with self.store.db:
+                self.store.db.execute("UPDATE sessions SET lease_holder = 'replacement' WHERE id = ?", (self.sid,))
+            return {"role": "assistant", "content": "stale reply"}
+        with self.assertRaises(SessionBusy):
+            self.agent(model).run_turn("hello")
+        self.assertEqual([m["role"] for m in self.store.messages(self.sid)], ["user"])
+
+    def test_lost_lease_during_summary_prevents_compaction(self):
+        fill(self.store, self.sid, 20, size=600)
+        before = self.store.messages(self.sid)
+        self.s.history_chars = 3000
+        def model(*args, **kw):
+            with self.store.db:
+                self.store.db.execute("UPDATE sessions SET lease_holder = 'replacement' WHERE id = ?", (self.sid,))
+            return {"role": "assistant", "content": "small summary"}
+        with self.assertRaises(SessionBusy):
+            self.agent(model).run_turn("new request")
+        self.assertEqual(self.store.messages(self.sid), before)
 
     @unittest.skipUnless(os.name == "posix", "dead-process check is POSIX only")
     def test_dead_holder_is_taken_over(self):

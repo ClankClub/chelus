@@ -19,7 +19,7 @@ The name: *chelys* (KEL-iss) is the tortoise shell that baby Hermes turned into 
 On the phone, in Termux:
 
 ```sh
-git clone https://github.com/silascroe/chelys ~/chelys
+git clone https://github.com/ClankClub/chelys ~/chelys
 ln -sf ~/chelys/chelys.sh $PREFIX/bin/chelys
 ```
 
@@ -135,9 +135,9 @@ pkill -f "[p]ython -m chelys telegram"     # stop it
 | `skills_list`, `skill_view` | none (owner only) |
 | `skill_manage` | asks, with more choices (see Skills) |
 
-`run_shell` runs commands in Termux with a timeout and kills the whole process group when time runs out. It is not a sandbox. The approval prompt is the safety.
+`run_shell` runs commands in Termux with a timeout. It captures at most 65,536 bytes total across stdout and stderr; exceeding that limit stops the process group and returns an explicit error with bounded partial output. Timeout and Ctrl-C also kill the process group. The later `tool_output_chars` setting limits what enters model context, separately from this capture limit. It is not a sandbox. The approval prompt is the safety.
 
-File tools refuse the config folder, the data folder and `~/.ssh` for everyone, so the API key, bot token and history can't be read through them. Guests are limited further, to visible files under `workdir`.
+File tools refuse the config folder, the data folder and `~/.ssh` for everyone, so the API key, bot token and history can't be read through them. Guests are limited further, to visible files under `workdir`. Directory listings apply the same policy to each child before showing names or metadata, including symlink targets.
 
 ## Skills
 
@@ -200,7 +200,9 @@ python -m unittest discover -s tests -t .
 
 The tests use a fake model and a fake local HTTP server. They never call DeepSeek. The two shell tests are skipped on Windows.
 
-`scripts/deploy.sh` copies a working copy to a phone over SSH (host alias `galaxy-a10e`, or set `CHELYS_HOST`) and runs the tests there.
+`sh scripts/deploy.sh` sends a candidate to a temporary folder on the phone over SSH (host alias `galaxy-a10e`, or set `CHELYS_HOST`). It runs the suite there and returns the actual test status. Failed tests leave the installed code untouched. Only a passing candidate is copied into `~/chelys`; this final copy is not an atomic service upgrade. Stop the running bridge before deploying and restart it afterward. This script does not restart the bridge automatically.
+
+Current test evidence, branch state and remaining real-device checks are in [docs/STATUS.md](docs/STATUS.md).
 
 ## Design notes
 
@@ -210,7 +212,11 @@ The tests use a fake model and a fake local HTTP server. They never call DeepSee
 
 **History is summarized, not dropped.** When the conversation would no longer fit in `history_chars`, the model summarizes the older middle into fixed sections (open request, goal, constraints, completed actions and so on), and the summary rides along with the first message after it. The first turn and the most recent turns stay word for word. Old rows are archived in the database, not deleted. A summary over twice its size budget gets one pass to condense it, and a summary that wouldn't make the history smaller is thrown away. If summarizing fails, nothing changes and it tries again 10 minutes later.
 
-**One turn at a time.** The terminal and the Telegram bridge can share a conversation, but each turn takes a lease on it, and a second process gets a "busy" error instead of interleaving turns.
+**One turn at a time.** The terminal and the Telegram bridge can share a conversation, but each turn takes a lease on it, and a second process gets a "busy" error instead of interleaving turns. A live local process retains ownership even when provider retries outlast the lease timestamp; dead processes can be reclaimed immediately. Expiration recovers legacy holders without a recognizable PID. A hung live holder must be stopped explicitly, or you can start another conversation. Ownership is rechecked after provider calls and approval waits and before tools/history writes; lost ownership stops the turn.
+
+**Bounded API responses.** Success bodies are capped at 2 MiB before JSON parsing; HTTP-error details are read up to 2,000 bytes. Invalid message or tool-call shapes become retryable provider errors instead of escaping as Python exceptions. Tool argument strings still pass to the agent for its normal JSON repair/error path.
+
+**Telegram intake.** Fetched update batches are queued and delivered one event at a time, so approval and `/stop` early returns preserve the rest of the batch. The queue is in memory; this is not a durable inbox or an exactly-once delivery guarantee across process crashes.
 
 **DeepSeek quirks.** Both are handled in `provider.py`, following lessons Hermes recorded:
 
