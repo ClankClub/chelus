@@ -6,7 +6,7 @@ import argparse
 import sys
 import time
 
-from . import __version__, approval, curator, learn, provider, review, skill_tools, skills
+from . import __version__, approval, curator, learn, memory, provider, review, skill_tools, skills
 from .agent import LEARN_STEPS, Agent
 from .config import ConfigError, Settings, load_api_key, load_settings
 from .store import SessionBusy, Store
@@ -14,14 +14,15 @@ from .store import SessionBusy, Store
 EXIT_OK, EXIT_PROVIDER, EXIT_CONFIG, EXIT_INTERRUPT = 0, 1, 2, 130
 
 CHAT_HELP = ("Commands: /new starts a fresh conversation, /learn [what] turns something into a skill, "
-             "/quit exits. Ctrl-C cancels the current reply. Skills: chelys skills --help")
+             "/memory shows what Chelys remembers, /quit exits. Ctrl-C cancels the current reply. "
+             "More: chelys skills --help, chelys memory --help")
 CHOICE_KEYS = {"o": approval.ONCE, "y": approval.ONCE, "yes": approval.ONCE, "s": approval.SESSION,
                "a": approval.ALWAYS}
 
 
 def _event(kind: str, text: str) -> None:
     label = {"tool": "  > ", "result": "    = ", "denied": "  x denied: ", "retry": "  ~ ", "wait": "  ~ ",
-             "guard": "  ! ", "notice": "  ~ ", "usage": "  . "}.get(kind, "  ")
+             "guard": "  ! ", "notice": "  ~ ", "usage": "  . ", "memory": "  + remembered: "}.get(kind, "  ")
     print(f"{label}{text}", file=sys.stderr, flush=True)
 
 
@@ -84,6 +85,9 @@ def cmd_chat(s: Settings, args: argparse.Namespace) -> int:
             if line == "/help":
                 print(CHAT_HELP)
                 continue
+            if line == "/memory":
+                print(memory.owner_view(s))
+                continue
             api_text, steps = None, None
             if line == "/learn" or line.startswith("/learn "):
                 api_text, steps = learn.build_prompt(line[len("/learn"):]), LEARN_STEPS
@@ -96,14 +100,14 @@ def cmd_chat(s: Settings, args: argparse.Namespace) -> int:
                 print(f"[error] {e}")
                 continue
             print(f"bot> {reply}")
-            if agent.review_due:
+            if agent.review_due or agent.memory_review_due:
                 try:
                     result = review.run(agent)
                 except KeyboardInterrupt:
-                    print("\n[skill review cancelled]")
+                    print("\n[review cancelled]")
                     continue
                 if result.staged:
-                    print(f"  ~ {len(result.staged)} skill change(s) wait for you: chelys skills pending")
+                    print(f"  ~ {len(result.staged)} change(s) wait for you: chelys skills pending")
     finally:
         store.close()
 
@@ -235,6 +239,20 @@ def cmd_skills(s: Settings, args: argparse.Namespace) -> int:
         store.close()
 
 
+def cmd_memory(s: Settings, args: argparse.Namespace) -> int:
+    if args.action == "show":
+        print(memory.owner_view(s))
+        return EXIT_OK
+    if args.action == "forget":
+        if len(args.rest) != 2:
+            print("usage: chelys memory forget user|memory N", file=sys.stderr)
+            return EXIT_CONFIG
+        print(memory.forget(s, *args.rest))
+        return EXIT_OK
+    print(memory.root(s))
+    return EXIT_OK
+
+
 def cmd_telegram(s: Settings, args: argparse.Namespace) -> int:
     from . import telegram  # optional feature: only imported when used
     return telegram.run(s)
@@ -269,6 +287,11 @@ def build_parser() -> argparse.ArgumentParser:
                     help="list (default); view NAME; pending; approve ID; reject ID; undo NAME (the last change); "
                          "history [NAME]; pin/unpin NAME (curator); revoke NAME (drop 'always'); curate (run now)")
     sk.add_argument("name", nargs="?")
+    me = sub.add_parser("memory", help="show what Chelys remembers, or forget an entry")
+    me.add_argument("action", nargs="?", default="show", choices=["show", "forget", "path"],
+                    help="show (default); forget user|memory N; path (where the files are, to edit by hand). "
+                         "Changes the background review proposes are under: chelys skills pending")
+    me.add_argument("rest", nargs="*")
     return p
 
 
@@ -277,7 +300,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command is None:
         args = build_parser().parse_args(["chat", *(argv if argv is not None else sys.argv[1:])])
     handlers = {"chat": cmd_chat, "ask": cmd_ask, "sessions": cmd_sessions, "show": cmd_show,
-                "telegram": cmd_telegram, "usage": cmd_usage, "skills": cmd_skills}
+                "telegram": cmd_telegram, "usage": cmd_usage, "skills": cmd_skills, "memory": cmd_memory}
     try:
         s = load_settings()
         return handlers[args.command](s, args)

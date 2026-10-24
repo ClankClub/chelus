@@ -52,6 +52,16 @@ class Settings:
     # Weekly cleanup of skills the background review created: stale after 14 idle days,
     # archived after 30 (Hermes's curator, without its LLM pass).
     curator: bool = True
+    # Memory (owner only): two small files of facts in every conversation's prompt, written
+    # by Chelys without asking (Hermes's default; the reply shows each write). Limits are in
+    # characters (Hermes: 2,200 and 1,375). The memory review runs after this many owner
+    # messages (Hermes: 10); 0 turns it off.
+    memory: bool = True
+    memory_char_limit: int = 2200
+    user_char_limit: int = 1375
+    memory_review_interval: int = 10
+    # Full-text search over past conversations (owner only; needs SQLite with FTS5).
+    session_search: bool = True
     # Where file tools start and shell commands run.
     workdir: str = field(default_factory=lambda: str(Path.home()))
     config_dir: Path = field(default_factory=_config_dir)

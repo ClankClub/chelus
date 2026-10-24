@@ -171,8 +171,4 @@ Turning both stores off removes the tool and its guidance. With one off, the sch
 4. **Review.** Add memory to `review.py`: a user-turn counter (10), the combined prompt when both are due, `add` applied directly, `patch` and `remove` staged as pending cards pinned to the exact entry, through the same Approve and Reject buttons as skills.
 5. **`session_search`.** An FTS5 table over the text of user and assistant rows, kept in sync on insert, with discovery and scroll shapes, compacted rows searchable, and live rows of the current conversation excluded. Owner only. It costs nothing in the prompt and is the only recall for anything older than the live window.
 
-Decisions for the owner:
-
-- **Approval for foreground memory writes.** Hermes's default is to write freely. Skills here are "always ask". Memory entries are one line, so I'd suggest free writes plus the visible notice, with destructive background writes always staged, as Hermes does. The alternative is the same ask card as skills.
-- **Undo.** Hermes has none for memory. Recording each memory write as a revision, like `skill_revisions`, would give `/undo memory` cheaply.
-- **Whether to do 5 now or after 1-4.** It's independent of the others, and it's the one piece that helps the long Telegram conversation right away.
+Decisions (2026-10-24): memory writes need no approval (the reply shows each one; background patches and removes still wait for the owner); no undo; session search built with the rest. All five items are built. Not ported: write_approval, the CLI inline prompt, external providers.

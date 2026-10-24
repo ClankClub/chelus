@@ -34,14 +34,16 @@ Port one subsystem at a time (memory, then skills, and so on), not all of Hermes
 | `chelys/skill_tools.py` | `skills_list`, `skill_view`, `skill_manage`: plan, scan, approve or stage, apply, undo |
 | `chelys/skill_guard.py` | content scanner and lint for skill writes |
 | `chelys/learn.py` | the `/learn` prompt |
-| `chelys/review.py` | background skill review after the reply |
+| `chelys/review.py` | background review after the reply: skills, memory, or both |
+| `chelys/memory.py` | `memory` tool, MEMORY.md/USER.md store, prompt snapshot, `/memory` |
+| `chelys/session_search.py` | `session_search` over the FTS5 index in store.py |
 | `chelys/curator.py` | weekly stale/archive pass over review-made skills |
 | `chelys/store.py` | SQLite history saved as it happens, soft-archive, turn lease, history window, usage log |
 | `chelys/config.py` | settings, `config.toml`, key loading |
 | `chelys/cli.py` | `chat`, `ask`, `sessions`, `show`, `usage`, `skills`, `telegram` |
 | `chelys/telegram.py` | Telegram long-polling bridge, owner-only, approval buttons, pending-skill cards, skill commands, outage countdown with `/stop` (imported only by `chelys telegram`) |
 | `scripts/deploy.sh` | copy to the phone over SSH and run the tests there |
-| `docs/hermes/` | reading notes on Hermes; port lists in [brain_summary.md](docs/hermes/brain_summary.md) (turn loop, done) [skills.md](docs/hermes/skills.md) (skills, built) and [memory.md](docs/hermes/memory.md) (memory and session search, read, port list awaiting agreement) |
+| `docs/hermes/` | reading notes on Hermes; port lists in [brain_summary.md](docs/hermes/brain_summary.md) (turn loop, done) [skills.md](docs/hermes/skills.md) (skills, built) and [memory.md](docs/hermes/memory.md) (memory and session search, built) |
 
 Phone access from the dev PC: `ssh galaxy-a10e`.
 
@@ -65,3 +67,5 @@ Telegram bridge: 39 tests pass on the PC and on the phone (fake Telegram API), i
 Ported from Hermes since v0.1.0: all 13 items in [brain_summary.md](docs/hermes/brain_summary.md). Items 1-8 (retries, cache-stable prompt, usage log, truncation, tool-call fixes, grace call, loop guard, `[used ...]` tag) were verified live on the phone on 2026-10-24: 62% cache hits on a short chat and a correct tool tag. Items 9-13 (persist as you go, request deadline, auto-recovery, compaction, turn lease) pass 101 tests on the PC but have not run live yet. Old databases are migrated in place on open.
 
 Skills (all of [skills.md](docs/hermes/skills.md)): built on 2026-10-24, with file-tool confinement (config, data and `~/.ssh` refused for everyone; guests limited to the workdir). 138 tests pass on the PC and the phone. Not yet run live: the bridge on the phone was still running older code when this was written.
+
+Memory and session search (all of [memory.md](docs/hermes/memory.md)): built on 2026-10-24. 209 tests pass on the PC and the phone. Live on the phone with DeepSeek: a save in one conversation was recalled in a new one, and session_search found and read an old conversation. The memory review and pending memory cards have not run live yet.

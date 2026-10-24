@@ -156,6 +156,12 @@ def tool_one_liner(name: str, args: dict[str, Any], content: str) -> str:
         skill = str(args.get("name", "?"))
         fp = f" file={args['file_path']}" if args.get("file_path") else ""
         return f"[skill_view] name={skill}{fp} ({len(content):,} chars) {PRUNED_MARKER.format(name=skill)}"
+    if name == "memory":  # what was saved must survive; it's short anyway
+        first = content.split(". This write is complete", 1)[0]
+        return f"[memory] target={args.get('target', '?')} {first[:300]}"
+    if name == "session_search":
+        what = f"query={str(args.get('query'))[:80]!r}" if args.get("query") else f"session_id={args.get('session_id')}"
+        return f"[session_search] {what} ({len(content):,} chars of results)"
     path = args.get("path", "?")
     if failed:
         return f"[{name}] {path} FAILED: {content.splitlines()[0][:120]}"

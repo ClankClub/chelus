@@ -18,7 +18,7 @@ import urllib.error
 import urllib.request
 from typing import Any
 
-from . import approval, curator, learn, provider, review, skill_tools, skills
+from . import approval, curator, learn, memory, provider, review, skill_tools, skills
 from .agent import LEARN_STEPS, Agent
 from .config import ConfigError, Settings, load_api_key
 from .stats import RuntimeStats, StatsPreferences
@@ -38,6 +38,8 @@ HELP = (
     "/skills  list skills and waiting changes\n"
     "/pending  show skill changes waiting for your OK\n"
     "/undo <skill>  undo the last change to a skill\n"
+    "/memory  what I remember about you and this phone\n"
+    "/memory forget user|memory N  delete entry N\n"
     "/stop  cancel an automatic retry while DeepSeek is down\n"
     "/stats [on|off|info]  toggle/set runtime footer, or show telemetry\n"
     "/stats add|remove mem cpu bat swap up disk  select fields for this chat\n"
@@ -53,7 +55,7 @@ GUEST_HELP = (
     "/stats reset  restore default mem/cpu/bat and enable footer\n"
     "/help  this message"
 )
-OWNER_ONLY = ("/learn", "/skills", "/pending", "/undo")
+OWNER_ONLY = ("/learn", "/skills", "/pending", "/undo", "/memory")
 # Approval buttons: callback code -> choice
 CODES = {"ok": approval.ONCE, "se": approval.SESSION, "al": approval.ALWAYS, "no": approval.DENY}
 CHOICE_CODES = {v: k for k, v in CODES.items()}
@@ -369,9 +371,22 @@ class Bridge:
             else:
                 self._send(chat_id, skill_tools.undo(self.s, store, arg.split()[0]))
 
+    def memory_command(self, chat_id: int, arg: str) -> None:
+        parts = arg.split()
+        if not parts:
+            text = memory.owner_view(self.s)
+            waiting = sum(1 for r in self.make_agent.store.pending() if r["origin"] == memory.ORIGIN)
+            if waiting:
+                text += f"\n{waiting} memory change(s) wait for your OK: /pending"
+            self._send(chat_id, text)
+        elif parts[0] == "forget" and len(parts) == 3:
+            self._send(chat_id, memory.forget(self.s, parts[1], parts[2]))
+        else:
+            self._send(chat_id, "Usage: /memory, or /memory forget user|memory N")
+
     def after_reply(self, chat_id: int, agent: Agent) -> None:
         """The background review, after the reply is out (Hermes runs it the same way)."""
-        if not agent.review_due:
+        if not (agent.review_due or agent.memory_review_due):
             return
         try:
             self.bot.call("sendChatAction", {"chat_id": chat_id, "action": "typing"})
@@ -379,7 +394,7 @@ class Bridge:
             pass
         result = review.run(agent)
         self.log(f"[telegram] {result.summary()}")
-        if result.saved or result.staged or result.skipped:
+        if result.saved or result.remembered or result.staged or result.skipped:
             self._send(chat_id, result.summary())
         if result.staged:
             store = self.make_agent.store
@@ -440,6 +455,9 @@ class Bridge:
         if command in ("/skills", "/pending", "/undo"):
             self.skill_command(chat_id, command, arg)
             return
+        if command == "/memory":
+            self.memory_command(chat_id, arg)
+            return
         api_text, step_limit = None, None
         if command == "/learn":
             api_text, step_limit = learn.build_prompt(arg), LEARN_STEPS
@@ -474,8 +492,12 @@ class Bridge:
         except (provider.ProviderError, SessionBusy) as e:
             self._send(chat_id, f"[error] {e}")
             return
-        if agent.tools_ok:  # only tools that actually ran, not denied or failed calls
-            reply = f"[used {', '.join(dict.fromkeys(agent.tools_ok))}]\n{reply}"
+        # Every memory write is shown, so a claimed save that never happened is visible.
+        notes = "".join(f"[remembered] {n}\n" for n in agent.memory_notes)
+        used = [t for t in dict.fromkeys(agent.tools_ok) if t != "memory"]
+        if used:  # only tools that actually ran, not denied or failed calls
+            notes = f"[used {', '.join(used)}]\n" + notes
+        reply = notes + reply
         self._send(chat_id, reply)
         if is_owner:
             self.after_reply(chat_id, agent)
@@ -535,6 +557,12 @@ class AgentFactory:
         self.api_key = api_key
         self.store = store
         self.owner = owner
+        # Guests' conversations are kept out of session_search; mark the ones already on disk.
+        for f in s.data_dir.glob("telegram_session_*"):
+            try:
+                self.store.set_session_field(int(f.read_text().strip()), "guest", 1)
+            except (OSError, ValueError):
+                pass
 
     def _session_file(self, user: int):
         name = "telegram_session" if user == self.owner else f"telegram_session_{user}"
@@ -544,6 +572,8 @@ class AgentFactory:
         try:
             sid = int(self._session_file(user).read_text().strip())
             if self.store.session_exists(sid):
+                if user != self.owner:
+                    self.store.set_session_field(sid, "guest", 1)
                 return sid
         except (FileNotFoundError, ValueError):
             pass
@@ -551,6 +581,8 @@ class AgentFactory:
 
     def new_session(self, user: int) -> int:
         sid = self.store.new_session()
+        if user != self.owner:
+            self.store.set_session_field(sid, "guest", 1)
         path = self._session_file(user)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(str(sid))

@@ -4,8 +4,8 @@ Risky tools (writing files, running shell commands) go through the agent's permi
 callback before they run. Arbitrary shell access is not a sandbox; the gate is the safety.
 
 File tools never touch Chelys's own config and data directories (API key, bot token,
-history, skills) or ~/.ssh, for anyone. Skills are read and written through the skill
-tools, which have their own checks. Guests are further limited to non-hidden paths under
+history, skills, memory) or ~/.ssh, for anyone. Skills and memory are read and written
+through their own tools, which have their own checks. Guests are further limited to non-hidden paths under
 the working directory.
 """
 
@@ -34,7 +34,7 @@ class Tool:
     parameters: dict[str, Any]
     handler: Callable[..., str]    # (settings, args, ctx=None) -> output
     risky: bool = False
-    group: str = "core"            # "skills": owner only, never offered to guests
+    group: str = "core"            # "skills", "memory": owner only, never offered to guests
     max_output: int | None = None  # output cap, if not tool_output_chars
 
     def schema(self) -> dict[str, Any]:
@@ -236,9 +236,12 @@ def register(tool: Tool) -> None:
     TOOLS[tool.name] = tool
 
 
-def available(guest: bool = False) -> list[str]:
-    """Tool names offered to this kind of user; guests never see the skill tools."""
-    return [n for n, t in TOOLS.items() if not (guest and t.group == "skills")]
+OWNER_GROUPS = ("skills", "memory")
+
+
+def available(guest: bool = False, disabled: tuple[str, ...] = ()) -> list[str]:
+    """Tool names offered to this kind of user; guests never see the skill or memory tools."""
+    return [n for n, t in TOOLS.items() if not (guest and t.group in OWNER_GROUPS) and n not in disabled]
 
 
 def schemas(names: list[str] | None = None) -> list[dict[str, Any]]:

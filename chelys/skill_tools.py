@@ -315,6 +315,9 @@ def apply_pending(s: Any, store: Any, pid: str) -> str:
     rec = store.get_pending(pid)
     if rec is None:
         return f"no pending change {pid}"
+    if rec["origin"] == "memory_review":  # the queue is shared with memory changes
+        from . import memory
+        return memory.apply_pending(s, store, rec)
     store.drop_pending(pid)
     base = skills.root(s)
     try:
@@ -330,6 +333,9 @@ def reject_pending(store: Any, pid: str) -> str:
 
 def pending_card(rec: dict[str, Any], s: Any) -> str:
     """A pending change as the owner sees it: what, why, and the diff as it would apply now."""
+    if rec["origin"] == "memory_review":
+        from . import memory
+        return memory.pending_card(rec, s)
     base = skills.root(s)
     purpose = rec["payload"].get("purpose") or ""
     try:

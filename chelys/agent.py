@@ -21,6 +21,11 @@ Skills (docs/hermes/skills.md): the owner's prompt carries the skill index, froz
 conversation so the prompt stays byte-stable; when the library changes mid-conversation,
 the next user message carries a one-time note instead. Guests get no skill tools and no
 index. After enough tool-calling steps, the caller runs the background review (review.py).
+
+Memory (docs/hermes/memory.md): the owner's prompt also carries both memory stores, frozen
+per conversation the same way and refreshed at compaction, plus the guidance for the memory
+and session_search tools. After 10 owner messages the review also looks for facts to keep.
+Guests get neither.
 """
 
 from __future__ import annotations
@@ -34,7 +39,8 @@ import time
 from importlib import resources
 from typing import Any, Callable
 
-from . import approval, compaction, guardrails, provider, skill_tools, skills, tools  # skill_tools registers its tools
+# skill_tools, memory and session_search register their tools on import
+from . import approval, compaction, guardrails, memory, provider, session_search, skill_tools, skills, tools  # noqa: F401
 from .config import Settings
 from .repetition import is_repetition_dominated
 from .store import Store, history_chars, recent_window
@@ -105,9 +111,21 @@ def load_persona(s: Settings) -> str:
     return resources.files("chelys").joinpath("persona_default.md").read_text(encoding="utf-8").strip()
 
 
-def system_prompt(s: Settings, guest: bool = False, skills_index: str | None = None) -> str:
-    """Byte-stable for a given config and frozen skill index: nothing here may change
-    between turns (no clock), or DeepSeek's prefix cache misses on the whole history."""
+def disabled_tools(s: Settings, store: Store | None = None) -> tuple[str, ...]:
+    """Tools switched off by config, or unavailable here (session search needs FTS5)."""
+    off = []
+    if not s.memory:
+        off.append("memory")
+    if not s.session_search or (store is not None and not store.fts):
+        off.append("session_search")
+    return tuple(off)
+
+
+def system_prompt(s: Settings, guest: bool = False, skills_index: str | None = None,
+                  memory_snapshot: str | None = None, search: bool = False) -> str:
+    """Byte-stable for a given config, frozen skill index and frozen memory snapshot:
+    nothing here may change between turns (no clock), or DeepSeek's prefix cache misses on
+    the whole history. Order follows Hermes: identity and rules, then skills, then memory."""
     names = tools.available(guest)
     risky = ", ".join(n for n in names if tools.TOOLS[n].risky)
     prompt = (
@@ -123,10 +141,22 @@ def system_prompt(s: Settings, guest: bool = False, skills_index: str | None = N
     )
     if guest:
         prompt += ("\n\nYou are talking with a guest the owner invited, not the owner. Risky tools are off for "
-                   "guests, and you have no skills in this conversation.")
-    elif skills_index is not None:
+                   "guests, and you have no skills or memory in this conversation.")
+        return prompt
+    if skills_index is not None:
         prompt += "\n\n" + skills.prompt_section(skills_index)
+    recall = memory.prompt_section(memory_snapshot if s.memory else None, search)
+    if recall:
+        prompt += "\n\n" + recall
     return prompt
+
+
+def conversation_prompt(s: Settings, store: Store, session_id: int) -> str:
+    """The owner's prompt for a conversation, from its frozen skill index and memory
+    snapshot: what the background review must replay to read the prefix cache warm."""
+    return system_prompt(s, False, store.session_field(session_id, "skills_index") or "",
+                         store.session_field(session_id, "memory_snapshot") or "",
+                         "session_search" not in disabled_tools(s, store))
 
 
 LEARN_STEPS = 16  # a /learn turn reads sources and writes several files; Hermes gives it a normal turn's budget
@@ -237,15 +267,18 @@ class Agent:
         self.autorecover = autorecover  # wait out outages (unattended surfaces)
         self.guest = guest          # a Telegram guest: no risky tools, no skills, confined file tools
         self.actor = actor          # "foreground", or "review" for the background skill review
-        self.tool_names = tools.available(guest)
-        # The prompt is rebuilt from the conversation's frozen skill index at each turn start,
-        # which gives the same bytes every turn until compaction refreshes the index.
+        self.tool_names = tools.available(guest, disabled_tools(s, store))
+        # The prompt is rebuilt from the conversation's frozen skill index and memory snapshot
+        # at each turn start: the same bytes every turn until compaction refreshes both.
         self.system = system_prompt(s, guest, None if guest else "")
         self.tools_ok: list[str] = []       # tools that ran and returned normally, latest turn
         self.tools_started: list[str] = []  # tools whose handler was invoked, latest turn
         self.viewed: set[tuple[str, str]] = set()  # (skill, file) loaded with skill_view; the review's read-before-write
         self.staged: list[str] = []         # pending change ids this agent proposed (background review)
-        self.review_due = False             # the caller should run the background review after replying
+        self.review_due = False             # the caller should run the background skill review after replying
+        self.memory_review_due = False      # ... and/or the memory review
+        self.memory_failures = 0            # failed memory writes this turn (the tool stops at 3)
+        self.memory_notes: list[str] = []   # memory writes this turn, for the reply's notice
         self.step_limit = s.max_iterations
         self._history: list[dict[str, Any]] = []
         self._turn: list[dict[str, Any]] = []
@@ -273,7 +306,8 @@ class Agent:
         user_msg = stamp_user_message(user_text, api_text=api_text)  # the turn's clock is frozen here
         self.tools_ok, self.tools_started = [], []
         self._turn_no, self._recoveries = None, 0
-        self.review_due = False
+        self.review_due = self.memory_review_due = False
+        self.memory_failures, self.memory_notes = 0, []
         self.step_limit = max(step_limit or 0, self.s.max_iterations)
         holder = f"pid={os.getpid()}:{secrets.token_hex(3)}"
         self.store.acquire_lease(self.session_id, holder)
@@ -283,11 +317,12 @@ class Agent:
             history = self._close_open_turn(self.store.messages(self.session_id))
             self._compacted = False
             history = self._maybe_compact(history, user_msg)
-            self._prepare_skills(user_msg, refresh=self._compacted)
+            self._prepare_prompt(user_msg, refresh=self._compacted)
             self._turn_no = self.store.last_turn(self.session_id) + 1
             self._add(turn, user_msg)
             reply = self._loop(history, turn)
             self._check_review_due()
+            self._check_memory_review_due()
             return reply
         except KeyboardInterrupt:
             self._close_turn(turn, user_msg, "cancelled by the owner (Ctrl-C)")
@@ -345,15 +380,17 @@ class Agent:
         self.on_event("notice", "closed a turn an earlier run left unfinished")
         return history + fix
 
-    # ---- skills ----
+    # ---- skills and memory in the prompt ----
 
-    def _prepare_skills(self, user_msg: dict[str, Any], refresh: bool) -> None:
-        """Freeze this conversation's skill index into the prompt, and note changes since.
+    def _prepare_prompt(self, user_msg: dict[str, Any], refresh: bool) -> None:
+        """Freeze this conversation's skill index and memory snapshot into the prompt, and
+        note skill changes since.
 
-        The index is stored on the session row: the Telegram bridge builds a new Agent for
-        every message, so an in-memory snapshot would change the prompt (and lose the prefix
-        cache) whenever the library did. It is refreshed only when compaction has already
-        rewritten the history, as Hermes does."""
+        Both are stored on the session row: the Telegram bridge builds a new Agent for every
+        message, so an in-memory snapshot would change the prompt (and lose the prefix
+        cache) whenever the library or memory did. They are refreshed only when compaction
+        has already rewritten the history, as Hermes does. Memory written meanwhile is on
+        disk at once and in the conversation as the tool call that wrote it."""
         if self.guest:
             self.system = system_prompt(self.s, True)
             return
@@ -366,7 +403,11 @@ class Agent:
             frozen = skills.index_text(current)
             self.store.set_session_field(self.session_id, "skills_index", frozen)
             self.store.set_session_field(self.session_id, "skills_noted", "")
-        self.system = system_prompt(self.s, False, frozen)
+        snap = self.store.session_field(self.session_id, "memory_snapshot")
+        if self.s.memory and (snap is None or refresh):
+            snap = memory.snapshot(self.s)
+            self.store.set_session_field(self.session_id, "memory_snapshot", snap)
+        self.system = system_prompt(self.s, False, frozen, snap or "", "session_search" in self.tool_names)
         note = skills.change_note(frozen, skills.index_map(current))
         noted = self.store.session_field(self.session_id, "skills_noted") or ""
         if note == noted:
@@ -383,6 +424,19 @@ class Agent:
         if steps >= self.s.review_interval:
             self.store.set_session_field(self.session_id, "review_steps", 0)
             self.review_due = True
+
+    def _check_memory_review_due(self) -> None:
+        """Count owner messages toward the memory review (Hermes: every 10 user turns). A
+        turn in which the model saved to memory itself resets the count."""
+        if self.guest or self.actor != "foreground" or not self.s.memory or self.s.memory_review_interval <= 0:
+            return
+        try:
+            turns = 0 if "memory" in self.tools_ok else int(self.store.session_field(self.session_id, "memory_turns") or 0) + 1
+            if turns >= self.s.memory_review_interval:
+                turns, self.memory_review_due = 0, True
+            self.store.set_session_field(self.session_id, "memory_turns", turns)
+        except sqlite3.Error:
+            pass
 
     def _count_review_step(self, calls: list[dict[str, Any]]) -> None:
         """One tool-calling model step toward the next review; the model saving a skill

@@ -94,13 +94,17 @@ CREATE TABLE IF NOT EXISTS meta (
 
 # Columns added after v0.1.0; existing databases get them on open.
 MIGRATIONS = {
-    "messages": [("active", "INTEGER NOT NULL DEFAULT 1")],
+    "messages": [("active", "INTEGER NOT NULL DEFAULT 1"), ("ts", "REAL")],
     "sessions": [("lease_holder", "TEXT"), ("lease_expires", "REAL NOT NULL DEFAULT 0"),
                  ("compact_retry_at", "REAL NOT NULL DEFAULT 0"),
                  # skills: the index frozen into this conversation's prompt, the last change
                  # note sent, and model steps since the last skill review
                  ("skills_index", "TEXT"), ("skills_noted", "TEXT NOT NULL DEFAULT ''"),
-                 ("review_steps", "INTEGER NOT NULL DEFAULT 0")],
+                 ("review_steps", "INTEGER NOT NULL DEFAULT 0"),
+                 # memory: the stores frozen into this conversation's prompt and user turns
+                 # since the last memory review; guest conversations are never searched
+                 ("memory_snapshot", "TEXT"), ("memory_turns", "INTEGER NOT NULL DEFAULT 0"),
+                 ("guest", "INTEGER NOT NULL DEFAULT 0")],
 }
 
 USAGE_FIELDS = ("calls", "prompt", "completion", "cache_hit", "cache_miss")
@@ -134,6 +138,7 @@ class Store:
         self.db.execute("PRAGMA foreign_keys = ON")
         self.db.executescript(SCHEMA)
         self._migrate()
+        self.fts = self._init_fts()
 
     def _migrate(self) -> None:
         with self.db:
@@ -142,6 +147,32 @@ class Store:
                 for name, decl in cols:
                     if name not in have:
                         self.db.execute(f"ALTER TABLE {table} ADD COLUMN {name} {decl}")
+
+    def _init_fts(self) -> bool:
+        """The session_search index: the text of user and assistant rows, keyed by message
+        id. False if this SQLite has no FTS5. Built from existing rows the first time."""
+        try:
+            existed = self.db.execute("SELECT 1 FROM sqlite_master WHERE name = 'messages_fts'").fetchone()
+            with self.db:
+                self.db.execute("CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING "
+                                "fts5(text, tokenize = 'unicode61 remove_diacritics 2')")
+        except sqlite3.OperationalError:
+            return False
+        if not existed:
+            # Compaction re-inserts the rows it keeps, so old databases hold copies; index
+            # only the first row with a given text in each conversation.
+            seen: set[tuple[int, Any, str]] = set()
+            rows = []
+            for mid, sid, body in self.db.execute("SELECT id, session_id, body FROM messages ORDER BY id"):
+                m = json.loads(body)
+                text = search_text(m)
+                key = (sid, m.get("role"), text)
+                if text and key not in seen:
+                    seen.add(key)
+                    rows.append((mid, text))
+            with self.db:
+                self.db.executemany("INSERT INTO messages_fts (rowid, text) VALUES (?, ?)", rows)
+        return True
 
     def close(self) -> None:
         self.db.close()
@@ -184,11 +215,14 @@ class Store:
         in-memory flags and are not stored."""
         if not rows:
             return
+        now = time.time()
         with self.db:
-            self.db.executemany(
-                "INSERT INTO messages (session_id, turn, body) VALUES (?, ?, ?)",
-                [(session_id, turn, json.dumps(_storable(m), ensure_ascii=False)) for m in rows],
-            )
+            for m in rows:
+                cur = self.db.execute("INSERT INTO messages (session_id, turn, body, ts) VALUES (?, ?, ?, ?)",
+                                      (session_id, turn, json.dumps(_storable(m), ensure_ascii=False), now))
+                text = search_text(m)
+                if self.fts and text:
+                    self.db.execute("INSERT INTO messages_fts (rowid, text) VALUES (?, ?)", (cur.lastrowid, text))
             first_user = next((m.get("content") for m in rows if m.get("role") == "user"), "") or ""
             self.db.execute(
                 "UPDATE sessions SET updated = ?, title = CASE WHEN title = '' THEN ? ELSE title END WHERE id = ?",
@@ -201,13 +235,14 @@ class Store:
 
     def replace_active(self, session_id: int, rows: list[dict[str, Any]]) -> None:
         """Compaction commit, in one transaction: archive every live row and insert `rows`
-        as the new live history. Archived rows stay in the table (active = 0)."""
+        as the new live history. Archived rows stay in the table (active = 0). The new rows
+        copy rows that are already in the search index, so they aren't indexed again."""
         turn = self.last_turn(session_id)
         with self.db:
             self.db.execute("UPDATE messages SET active = 0 WHERE session_id = ? AND active = 1", (session_id,))
             self.db.executemany(
-                "INSERT INTO messages (session_id, turn, body) VALUES (?, ?, ?)",
-                [(session_id, turn, json.dumps(_storable(m), ensure_ascii=False)) for m in rows],
+                "INSERT INTO messages (session_id, turn, body, ts) VALUES (?, ?, ?, ?)",
+                [(session_id, turn, json.dumps(_storable(m), ensure_ascii=False), time.time()) for m in rows],
             )
 
     def archived_count(self, session_id: int) -> int:
@@ -289,17 +324,65 @@ class Store:
         return {k: int(v or 0) for k, v in zip(USAGE_FIELDS, row)}
 
 
-    # ---- per-conversation skill state ----
+    # ---- per-conversation skill and memory state ----
+
+    SESSION_FIELDS = ("skills_index", "skills_noted", "review_steps", "memory_snapshot", "memory_turns", "guest")
 
     def session_field(self, session_id: int, column: str) -> Any:
-        assert column in ("skills_index", "skills_noted", "review_steps")
+        assert column in self.SESSION_FIELDS
         row = self.db.execute(f"SELECT {column} FROM sessions WHERE id = ?", (session_id,)).fetchone()
         return row[0] if row else None
 
     def set_session_field(self, session_id: int, column: str, value: Any) -> None:
-        assert column in ("skills_index", "skills_noted", "review_steps")
+        assert column in self.SESSION_FIELDS
         with self.db:
             self.db.execute(f"UPDATE sessions SET {column} = ? WHERE id = ?", (value, session_id))
+
+    # ---- session search ----
+
+    def search(self, query: str, exclude: tuple[int, ...] = (), after: float | None = None,
+               before: float | None = None, limit: int = 300) -> list[dict[str, Any]]:
+        """Matching messages, best first (BM25), never from guest conversations. Raises
+        sqlite3.OperationalError on bad FTS5 syntax."""
+        sql = ("SELECT messages_fts.rowid, m.session_id, m.body, messages_fts.text, "
+               "snippet(messages_fts, 0, '>>', '<<', '...', 24), COALESCE(m.ts, s.created), bm25(messages_fts) "
+               "FROM messages_fts JOIN messages m ON m.id = messages_fts.rowid "
+               "JOIN sessions s ON s.id = m.session_id WHERE messages_fts MATCH ? AND s.guest = 0")
+        args: list[Any] = [query]
+        if exclude:
+            sql += f" AND m.session_id NOT IN ({', '.join('?' * len(exclude))})"
+            args += list(exclude)
+        if after is not None:
+            sql += " AND COALESCE(m.ts, s.created) >= ?"
+            args.append(after)
+        if before is not None:
+            sql += " AND COALESCE(m.ts, s.created) < ?"
+            args.append(before)
+        rows = self.db.execute(sql + " ORDER BY bm25(messages_fts) LIMIT ?", args + [limit]).fetchall()
+        return [{"id": r[0], "session_id": r[1], "role": json.loads(r[2]).get("role"), "text": r[3],
+                 "snippet": r[4], "ts": r[5], "rank": r[6]} for r in rows]
+
+    def searchable_messages(self, session_id: int) -> list[dict[str, Any]]:
+        """A conversation's indexed messages (user and assistant text), oldest first."""
+        rows = self.db.execute(
+            "SELECT m.id, m.body, messages_fts.text, COALESCE(m.ts, s.created) "
+            "FROM messages m JOIN messages_fts ON messages_fts.rowid = m.id "
+            "JOIN sessions s ON s.id = m.session_id WHERE m.session_id = ? ORDER BY m.id", (session_id,))
+        return [{"id": r[0], "role": json.loads(r[1]).get("role"), "text": r[2], "ts": r[3]} for r in rows]
+
+    def session_info(self, session_id: int) -> dict[str, Any] | None:
+        row = self.db.execute("SELECT id, created, updated, title, guest FROM sessions WHERE id = ?",
+                              (session_id,)).fetchone()
+        return dict(zip(("id", "created", "updated", "title", "guest"), row)) if row else None
+
+    def recent_sessions(self, exclude: tuple[int, ...] = (), limit: int = 10) -> list[dict[str, Any]]:
+        sql = ("SELECT s.id, s.created, s.updated, s.title, COUNT(m.id) FROM sessions s "
+               "LEFT JOIN messages m ON m.session_id = s.id AND m.active = 1 WHERE s.guest = 0")
+        if exclude:
+            sql += f" AND s.id NOT IN ({', '.join('?' * len(exclude))})"
+        rows = self.db.execute(sql + " GROUP BY s.id ORDER BY s.updated DESC, s.id DESC LIMIT ?",
+                               list(exclude) + [limit])
+        return [dict(zip(("id", "created", "updated", "title", "count"), r)) for r in rows]
 
     # ---- skill revisions ----
 
@@ -421,6 +504,15 @@ class Store:
         with self.db:
             self.db.execute("INSERT INTO meta (key, value) VALUES (?, ?) "
                             "ON CONFLICT(key) DO UPDATE SET value = excluded.value", (key, value))
+
+
+def search_text(m: dict[str, Any]) -> str:
+    """What session_search indexes for a row: the text of user and assistant messages. A
+    user row's `content` is what was typed, without the time stamp or a carried summary."""
+    if m.get("role") not in ("user", "assistant"):
+        return ""
+    c = m.get("content")
+    return c.strip() if isinstance(c, str) else ""
 
 
 def _storable(m: dict[str, Any]) -> dict[str, Any]:
