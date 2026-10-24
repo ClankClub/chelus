@@ -23,7 +23,18 @@ CREATE TABLE IF NOT EXISTS messages (
     body TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS messages_session ON messages(session_id, id);
+CREATE TABLE IF NOT EXISTS usage (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id INTEGER NOT NULL,
+    ts REAL NOT NULL,
+    prompt INTEGER NOT NULL DEFAULT 0,
+    completion INTEGER NOT NULL DEFAULT 0,
+    cache_hit INTEGER NOT NULL DEFAULT 0,
+    cache_miss INTEGER NOT NULL DEFAULT 0
+);
 """
+
+USAGE_FIELDS = ("calls", "prompt", "completion", "cache_hit", "cache_miss")
 
 
 class Store:
@@ -78,12 +89,41 @@ class Store:
                 (time.time(), first_user[:60], session_id),
             )
 
+    def log_usage(self, session_id: int, usage: dict[str, Any]) -> None:
+        """Record one model call's token counts (DeepSeek's usage block)."""
+        def n(key: str) -> int:
+            v = usage.get(key)
+            return int(v) if isinstance(v, (int, float)) else 0
+        with self.db:
+            self.db.execute(
+                "INSERT INTO usage (session_id, ts, prompt, completion, cache_hit, cache_miss) VALUES (?, ?, ?, ?, ?, ?)",
+                (session_id, time.time(), n("prompt_tokens"), n("completion_tokens"),
+                 n("prompt_cache_hit_tokens"), n("prompt_cache_miss_tokens")),
+            )
+
+    def usage_totals(self, session_id: int | None = None) -> dict[str, int]:
+        """Calls and token sums for one session, or for all of them."""
+        sql = "SELECT COUNT(*), SUM(prompt), SUM(completion), SUM(cache_hit), SUM(cache_miss) FROM usage"
+        if session_id is None:
+            row = self.db.execute(sql).fetchone()
+        else:
+            row = self.db.execute(sql + " WHERE session_id = ?", (session_id,)).fetchone()
+        return {k: int(v or 0) for k, v in zip(USAGE_FIELDS, row)}
+
 
 def recent_window(history: list[dict[str, Any]], max_chars: int) -> list[dict[str, Any]]:
-    """The newest slice of history that fits the character budget.
+    """The slice of history sent to the model, trimmed in blocks so its start stays put.
 
-    The slice always starts at a user message, so it never begins with a tool result
-    or an assistant tool call cut off from its pair. The newest turn is always kept.
+    DeepSeek caches the longest prefix it has seen before. Dropping one old turn per new
+    turn would move the window's start, and so break that prefix, on every message.
+    Instead the possible start points form a fixed chain: from one start, the next is the
+    first user message at least a quarter of max_chars further on. The chain depends only
+    on older history, so it doesn't shift as the conversation grows. The window starts at
+    the first point in the chain from which everything fits, so it jumps forward a block
+    at a time and stays still (cacheable) in between.
+
+    The slice always starts at a user message, so it never begins with a tool result or an
+    assistant tool call cut off from its pair. The newest turn is always kept.
     """
     starts = [i for i, m in enumerate(history) if m.get("role") == "user"]
     if not starts:
@@ -91,9 +131,8 @@ def recent_window(history: list[dict[str, Any]], max_chars: int) -> list[dict[st
     suffix = [0] * (len(history) + 1)
     for i in range(len(history) - 1, -1, -1):
         suffix[i] = suffix[i + 1] + len(json.dumps(history[i], ensure_ascii=False))
-    chosen = starts[-1]
-    for i in reversed(starts[:-1]):
-        if suffix[i] > max_chars:
-            break
-        chosen = i
-    return history[chosen:]
+    block = max(1, max_chars // 4)
+    pos = starts[0]
+    while suffix[pos] > max_chars and pos != starts[-1]:
+        pos = next((q for q in starts if q > pos and suffix[pos] - suffix[q] >= block), starts[-1])
+    return history[pos:]

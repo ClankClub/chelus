@@ -42,6 +42,7 @@ chelys chat --session 3
 chelys ask "how's the battery?"   # one message, then exit
 chelys sessions             # list conversations
 chelys show [N]             # print a conversation
+chelys usage                # token and cache-hit totals per conversation
 chelys telegram             # run the Telegram bot bridge (see below)
 ```
 
@@ -105,6 +106,8 @@ model = "deepseek-flash"      # DeepSeek renames models often; check their docs
 thinking = false              # sends {"thinking": {"type": "disabled"}}
 max_tokens = 2048
 request_timeout = 60.0
+api_max_retries = 3           # transient errors (429, 5xx, timeouts) are retried with backoff
+max_tokens_limit = 32768      # ceiling when a cut-off reply is retried with a bigger max_tokens
 max_iterations = 8            # model steps per message
 tool_output_chars = 6000
 shell_timeout = 30.0

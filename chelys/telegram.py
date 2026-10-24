@@ -242,11 +242,14 @@ class Bridge:
             self.bot.send(chat_id, f"Started conversation #{sid}.")
             return
 
-        used: list[str] = []
-
         def on_event(kind: str, detail: str) -> None:
-            if kind == "tool":
-                used.append(detail.split("(")[0].split(":")[0])
+            if kind in ("retry", "wait", "guard", "notice"):
+                self.log(f"[telegram] {kind}: {detail}")
+            if kind == "wait":  # a long retry wait: say so instead of going quiet for minutes
+                try:
+                    self.bot.send(chat_id, f"[waiting] {detail}")
+                except TelegramError:
+                    pass
 
         if is_owner:
             def approve(summary: str) -> bool:
@@ -266,8 +269,8 @@ class Bridge:
         except provider.ProviderError as e:
             self.bot.send(chat_id, f"[error] {e}")
             return
-        if used:
-            reply = f"[used {', '.join(dict.fromkeys(used))}]\n{reply}"
+        if agent.tools_ok:  # only tools that actually ran, not denied or failed calls
+            reply = f"[used {', '.join(dict.fromkeys(agent.tools_ok))}]\n{reply}"
         self.bot.send(chat_id, reply)
 
     def run_forever(self) -> None:
@@ -327,7 +330,8 @@ class AgentFactory:
         return sid
 
     def __call__(self, user: int, approve, on_event) -> Agent:
-        return Agent(self.s, self.api_key, self.store, self.session_for(user), approve, on_event)
+        # Unattended surface: the loop guard may stop a turn (Hermes does the same on its gateway).
+        return Agent(self.s, self.api_key, self.store, self.session_for(user), approve, on_event, hard_stop=True)
 
 
 def run(s: Settings) -> int:

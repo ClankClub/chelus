@@ -7,22 +7,81 @@ TLS verification uses Python's defaults and is never disabled.
 
 from __future__ import annotations
 
+import datetime
+import email.utils
 import json
+import random
 import socket
 import ssl
+import time
 import urllib.error
 import urllib.request
-from typing import Any
+from typing import Any, Callable
 
 from .config import Settings
 
 
 class ProviderError(Exception):
-    """A failed model request, with a message safe to show the user."""
+    """A failed model request, with a message safe to show the user.
+
+    retryable: a transient failure (429, 5xx, timeout, network, garbled 200) worth retrying.
+    retry_after: seconds the server asked us to wait, if it said.
+    """
+
+    def __init__(self, message: str, *, retryable: bool = False, retry_after: float | None = None):
+        super().__init__(message)
+        self.retryable = retryable
+        self.retry_after = retry_after
+
+
+# Retry policy, same numbers as Hermes Agent (retry_utils.py, turn_recovery.compute_error_backoff):
+# a server-requested wait wins (capped at 600 s), otherwise min(2 * 2^(n-1), 60) s plus 0-50% jitter.
+RETRY_AFTER_CAP_S = 600.0
+BACKOFF_BASE_S = 2.0
+BACKOFF_MAX_S = 60.0
+LONG_WAIT_S = 60.0  # waits at least this long are announced to the user as they start
+
+# 408 request timeout, 429 rate limit, and every 5xx are transient.
+RETRYABLE_STATUS = frozenset({408, 429})
+
+OnRetry = Callable[[int, int, float, str], None]  # (attempt, max_retries, wait_s, error)
+
+
+def jittered_backoff(attempt: int, base: float = BACKOFF_BASE_S, cap: float = BACKOFF_MAX_S) -> float:
+    """min(base * 2^(attempt-1), cap) plus 0-50% random jitter. attempt is 1-based."""
+    delay = min(base * 2 ** max(0, attempt - 1), cap)
+    return delay + random.uniform(0, 0.5 * delay)
+
+
+def parse_retry_after(value: Any) -> float | None:
+    """Seconds from a Retry-After value: a number, or an HTTP date. None if absent or junk."""
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return max(0.0, float(value))
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return max(0.0, float(text))
+    except ValueError:
+        pass
+    try:
+        when = email.utils.parsedate_to_datetime(text)
+    except (TypeError, ValueError):
+        return None
+    if when is None:
+        return None
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=datetime.timezone.utc)
+    return max(0.0, (when - datetime.datetime.now(datetime.timezone.utc)).total_seconds())
 
 
 def _api_message(msg: dict[str, Any], thinking: bool) -> dict[str, Any]:
     """Shape a stored message for the API.
+
+    A user message's api_content (the exact bytes first sent, including the turn's
+    timestamp) is replayed instead of its clean content, so the prefix stays cacheable.
 
     DeepSeek rules (docs, plus lessons recorded in Hermes Agent):
     - thinking on: every assistant message must carry reasoning_content, non-empty (" " pad),
@@ -31,6 +90,8 @@ def _api_message(msg: dict[str, Any], thinking: bool) -> dict[str, Any]:
     - an empty-string content on an assistant tool-call message is rejected; send null instead.
     """
     out = {k: v for k, v in msg.items() if k in ("role", "content", "tool_calls", "tool_call_id", "name")}
+    if msg.get("role") == "user" and msg.get("api_content"):
+        out["content"] = msg["api_content"]
     if msg.get("role") == "assistant":
         if out.get("tool_calls") and not out.get("content"):
             out["content"] = None
@@ -39,11 +100,13 @@ def _api_message(msg: dict[str, Any], thinking: bool) -> dict[str, Any]:
     return out
 
 
-def build_payload(s: Settings, messages: list[dict], tools: list[dict]) -> dict[str, Any]:
+def build_payload(
+    s: Settings, messages: list[dict], tools: list[dict], max_tokens: int | None = None
+) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "model": s.model,
         "messages": [_api_message(m, s.thinking) for m in messages],
-        "max_tokens": s.max_tokens,
+        "max_tokens": max_tokens or s.max_tokens,
         "thinking": {"type": "enabled" if s.thinking else "disabled"},
         "stream": False,
     }
@@ -52,9 +115,45 @@ def build_payload(s: Settings, messages: list[dict], tools: list[dict]) -> dict[
     return payload
 
 
-def chat(s: Settings, api_key: str, messages: list[dict], tools: list[dict]) -> dict[str, Any]:
-    """One non-streaming request. Returns the assistant message as a plain dict."""
-    body = json.dumps(build_payload(s, messages, tools)).encode("utf-8")
+def chat(
+    s: Settings,
+    api_key: str,
+    messages: list[dict],
+    tools: list[dict],
+    *,
+    max_tokens: int | None = None,
+    on_retry: OnRetry | None = None,
+    sleep: Callable[[float], None] = time.sleep,
+) -> dict[str, Any]:
+    """One model call, retried on transient failures. Returns the assistant message as a dict.
+
+    Retries 429, 5xx, timeouts, network errors and garbled 200s up to s.api_max_retries times.
+    Never retries 400/401/402/403/404: the same request would fail the same way.
+    The wait is a plain sleep, so Ctrl-C still cancels it.
+    """
+    attempt = 0
+    while True:
+        try:
+            return _chat_once(s, api_key, messages, tools, max_tokens)
+        except ProviderError as e:
+            if not e.retryable or attempt >= s.api_max_retries:
+                if attempt:
+                    raise ProviderError(f"{e} (gave up after {attempt} retries)") from None
+                raise
+            attempt += 1
+            if e.retry_after is not None:
+                wait = min(e.retry_after, RETRY_AFTER_CAP_S)
+            else:
+                wait = jittered_backoff(attempt)
+            if on_retry is not None:
+                on_retry(attempt, s.api_max_retries, wait, str(e))
+            sleep(wait)
+
+
+def _chat_once(
+    s: Settings, api_key: str, messages: list[dict], tools: list[dict], max_tokens: int | None
+) -> dict[str, Any]:
+    body = json.dumps(build_payload(s, messages, tools, max_tokens)).encode("utf-8")
     req = urllib.request.Request(
         s.base_url.rstrip("/") + "/chat/completions",
         data=body,
@@ -65,31 +164,34 @@ def chat(s: Settings, api_key: str, messages: list[dict], tools: list[dict]) -> 
             "Accept": "application/json",
         },
     )
+    timed_out = f"model request timed out after {s.request_timeout:g}s"
     try:
         with urllib.request.urlopen(req, timeout=s.request_timeout, context=ssl.create_default_context()) as resp:
             raw = resp.read()
     except urllib.error.HTTPError as e:
         try:
-            text = _http_error_text(e)
+            err = _http_error(e)
         finally:
             e.close()
-        raise ProviderError(text) from None
+        raise err from None
     except (TimeoutError, socket.timeout):
-        raise ProviderError(f"model request timed out after {s.request_timeout:g}s") from None
+        raise ProviderError(timed_out, retryable=True) from None
     except urllib.error.URLError as e:
         reason = e.reason
         if isinstance(reason, (TimeoutError, socket.timeout)):
-            raise ProviderError(f"model request timed out after {s.request_timeout:g}s") from None
-        raise ProviderError(f"could not reach {s.base_url}: {reason}") from None
+            raise ProviderError(timed_out, retryable=True) from None
+        raise ProviderError(f"could not reach {s.base_url}: {reason}", retryable=True) from None
     except OSError as e:
-        raise ProviderError(f"network error talking to {s.base_url}: {e}") from None
+        raise ProviderError(f"network error talking to {s.base_url}: {e}", retryable=True) from None
 
     try:
         data = json.loads(raw)
         choice = data["choices"][0]
         message = choice["message"]
     except (ValueError, KeyError, IndexError, TypeError):
-        raise ProviderError(f"unexpected response from model API: {raw[:300]!r}") from None
+        # Hermes treats a 200 without choices like a transient server error ("empty
+        # responses often mean rate limiting"), so it is retried.
+        raise ProviderError(f"unexpected response from model API: {raw[:300]!r}", retryable=True) from None
 
     out: dict[str, Any] = {"role": "assistant", "content": message.get("content")}
     if message.get("tool_calls"):
@@ -108,24 +210,31 @@ def chat(s: Settings, api_key: str, messages: list[dict], tools: list[dict]) -> 
     return out
 
 
-def _http_error_text(e: urllib.error.HTTPError) -> str:
+def _http_error(e: urllib.error.HTTPError) -> ProviderError:
     detail = ""
+    retry_after = parse_retry_after(e.headers.get("Retry-After") if e.headers else None)
     try:
-        body = e.read()[:2000]
-        parsed = json.loads(body)
-        detail = parsed.get("error", {}).get("message") or ""
+        parsed = json.loads(e.read()[:2000])
+        if isinstance(parsed, dict):
+            err = parsed.get("error")
+            if isinstance(err, dict):
+                detail = err.get("message") or ""
+                if retry_after is None:
+                    retry_after = parse_retry_after(err.get("retry_after"))
+            if retry_after is None:
+                retry_after = parse_retry_after(parsed.get("retry_after"))
     except Exception:
         pass
     hints = {
         401: "the API key was rejected (check ~/.config/chelys/deepseek.key)",
         402: "the DeepSeek account is out of balance",
-        429: "rate limited by DeepSeek; wait and retry",
+        429: "rate limited by DeepSeek",
     }
     text = f"model API returned HTTP {e.code}"
     if e.code in hints:
         text += f": {hints[e.code]}"
     elif e.code >= 500:
-        text += ": DeepSeek server error; retry later"
+        text += ": DeepSeek server error"
     if detail:
-        text += f" ({detail[:300]})"
-    return text
+        text += f" ({str(detail)[:300]})"
+    return ProviderError(text, retryable=e.code in RETRYABLE_STATUS or e.code >= 500, retry_after=retry_after)

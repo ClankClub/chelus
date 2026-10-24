@@ -24,6 +24,11 @@ class Settings:
     thinking: bool = False
     max_tokens: int = 2048
     request_timeout: float = 60.0
+    # Transient failures (429, 5xx, timeouts, network) are retried this many times.
+    api_max_retries: int = 3
+    # Ceiling for the boosted max_tokens used when a tool call is cut off (Hermes: 32768 when the
+    # model limit is unknown; DeepSeek accepted up to 393216 in a live test on 2026-10-24).
+    max_tokens_limit: int = 32768
     # Loop limits
     max_iterations: int = 8
     tool_output_chars: int = 6000

@@ -117,6 +117,13 @@ class BridgeTests(unittest.TestCase):
         ], guests={GUEST})
         self.assertEqual(bot.texts(), ["[used list_dir]\nsome files"])
 
+    def test_failed_tool_is_not_in_used_tag(self):
+        bot, _, _ = self.run_bridge([[msg(1, OWNER, "read it")]], [
+            {"role": "assistant", "content": None, "tool_calls": [tool_call("read_file", {"path": "nope.txt"})]},
+            {"role": "assistant", "content": "no such file"},
+        ])
+        self.assertEqual(bot.texts(), ["no such file"])
+
     def test_stranger_is_ignored(self):
         bot, model, bridge = self.run_bridge(
             [[msg(1, STRANGER, "run rm -rf"), msg(2, OWNER, "hi", chat_type="group")]], [])

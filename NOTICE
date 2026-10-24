@@ -7,12 +7,17 @@ Chelys is inspired by Hermes Agent:
 Chelys is an independent project and is not affiliated with or endorsed by
 Nous Research. "Hermes Agent" is their name for their software.
 
-As of v0.1.0, Chelys contains no Hermes source files. It borrows design ideas:
+Chelys contains no verbatim Hermes source files. `chelys/guardrails.py` and
+`chelys/repetition.py` are rebuilt from Hermes's tool_guardrails and
+repetition_guard modules (same thresholds and rules, written independently).
+It borrows design ideas:
 
 - the OpenAI-style tool schema and registry shape
 - a per-turn iteration budget
 - bounded tool output and error text returned to the model
 - a separate personality file (Hermes's SOUL.md)
+- retry/backoff numbers, truncation and continuation handling, the grace call
+  at the iteration cap, and a byte-stable system prompt
 - DeepSeek replay rules that Hermes recorded: reasoning_content must be echoed,
   padded with " ", in thinking mode, and empty-string content is rejected on
   tool-call turns

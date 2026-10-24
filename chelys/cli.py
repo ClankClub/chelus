@@ -17,7 +17,8 @@ CHAT_HELP = "Commands: /new starts a fresh conversation, /quit exits. Ctrl-C can
 
 
 def _event(kind: str, text: str) -> None:
-    label = {"tool": "  > ", "result": "    = ", "denied": "  x denied: "}.get(kind, "  ")
+    label = {"tool": "  > ", "result": "    = ", "denied": "  x denied: ", "retry": "  ~ ", "wait": "  ~ ",
+             "guard": "  ! ", "notice": "  ~ ", "usage": "  . "}.get(kind, "  ")
     print(f"{label}{text}", file=sys.stderr, flush=True)
 
 
@@ -135,6 +136,21 @@ def cmd_show(s: Settings, args: argparse.Namespace) -> int:
         store.close()
 
 
+def cmd_usage(s: Settings, args: argparse.Namespace) -> int:
+    store = Store(s.db_path)
+    try:
+        sid = args.session if args.session is not None else store.latest_session()
+        rows = [(f"conversation #{sid}", store.usage_totals(sid))] if sid is not None else []
+        rows.append(("all conversations", store.usage_totals()))
+        for label, t in rows:
+            hit_rate = f"{100 * t['cache_hit'] / t['prompt']:.0f}%" if t["prompt"] else "-"
+            print(f"{label}: {t['calls']} calls, {t['prompt']} tokens in ({t['cache_hit']} cached, "
+                  f"{hit_rate}), {t['completion']} out")
+        return EXIT_OK
+    finally:
+        store.close()
+
+
 def cmd_telegram(s: Settings, args: argparse.Namespace) -> int:
     from . import telegram  # optional feature: only imported when used
     return telegram.run(s)
@@ -160,6 +176,8 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("sessions", help="list conversations")
     sh = sub.add_parser("show", help="print a conversation (default: latest)")
     sh.add_argument("session", type=int, nargs="?")
+    u = sub.add_parser("usage", help="token usage and cache hits (default: latest conversation)")
+    u.add_argument("session", type=int, nargs="?")
     return p
 
 
@@ -168,7 +186,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command is None:
         args = build_parser().parse_args(["chat", *(argv if argv is not None else sys.argv[1:])])
     handlers = {"chat": cmd_chat, "ask": cmd_ask, "sessions": cmd_sessions, "show": cmd_show,
-                "telegram": cmd_telegram}
+                "telegram": cmd_telegram, "usage": cmd_usage}
     try:
         s = load_settings()
         return handlers[args.command](s, args)

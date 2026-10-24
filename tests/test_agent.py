@@ -14,8 +14,9 @@ import unittest
 from pathlib import Path
 
 from chelys import agent as agent_mod
-from chelys import provider, tools
+from chelys import guardrails, provider, tools
 from chelys.config import ConfigError, Settings, load_api_key, load_settings
+from chelys.repetition import is_repetition_dominated
 from chelys.store import Store, recent_window
 
 
@@ -36,8 +37,10 @@ class FakeModel:
     def __init__(self, replies):
         self.replies = list(replies)
         self.calls = []
+        self.kwargs = []
 
-    def __call__(self, s, key, messages, schemas):
+    def __call__(self, s, key, messages, schemas, **kw):
+        self.kwargs.append(kw)
         self.calls.append(json.loads(json.dumps(messages)))
         r = self.replies.pop(0)
         if isinstance(r, BaseException):
@@ -85,25 +88,48 @@ class AgentLoopTests(Base):
         self.assertTrue(model.calls[1][-1]["content"].startswith("error: not a file"))
 
     def test_bad_arguments_and_unknown_tool(self):
-        bad = {"id": "c1", "type": "function", "function": {"name": "read_file", "arguments": "{not json"}}
+        bad = {"id": "c1", "type": "function", "function": {"name": "read_file", "arguments": "{not json}"}}
+        cut = {"id": "c3", "type": "function", "function": {"name": "write_file", "arguments": '{"path": "a", "content": "lo'}}
+        empty = {"id": "c4", "type": "function", "function": {"name": "list_dir", "arguments": ""}}
         model = FakeModel([
-            {"role": "assistant", "content": None, "tool_calls": [bad, tool_call("launch_rocket", {}, "c2")]},
+            {"role": "assistant", "content": None,
+             "tool_calls": [bad, tool_call("launch_rocket", {}, "c2"), cut, empty]},
             {"role": "assistant", "content": "ok"},
         ])
         self.agent(model).run_turn("go")
         results = [m["content"] for m in model.calls[1] if m["role"] == "tool"]
         self.assertTrue(results[0].startswith("error: bad arguments"))
         self.assertTrue(results[1].startswith("error: no tool named"))
+        self.assertIn("Available tools: list_dir", results[1])
+        self.assertIn("cut off before the end", results[2])
+        self.assertFalse(results[3].startswith("error"), "empty-string arguments mean {}")
 
-    def test_iteration_limit(self):
+    def test_iteration_limit_asks_for_summary(self):
         self.s.max_iterations = 3
         loop = {"role": "assistant", "content": None, "tool_calls": [tool_call("list_dir", {})]}
-        model = FakeModel([loop, loop, loop, loop])
+        model = FakeModel([loop, loop, loop, {"role": "assistant", "content": "I listed the folder three times."}])
         reply = self.agent(model).run_turn("loop forever")
-        self.assertIn("limit of 3", reply)
-        self.assertEqual(len(model.calls), 3)
+        self.assertEqual(reply, "I listed the folder three times.")
+        self.assertEqual(len(model.calls), 4)
+        self.assertEqual(model.calls[3][-1]["content"], agent_mod.SUMMARY_REQUEST)
+        self.assertTrue(model.calls[3][0] == model.calls[0][0], "grace call keeps the same system prompt")
         saved = self.store.messages(self.sid)
-        self.assertEqual(saved[-1]["role"], "assistant")
+        self.assertEqual(saved[-1], {"role": "assistant", "content": "I listed the folder three times."})
+
+    def test_iteration_limit_summary_fails(self):
+        self.s.max_iterations = 1
+        loop = {"role": "assistant", "content": None, "tool_calls": [tool_call("list_dir", {})]}
+        model = FakeModel([loop, provider.ProviderError("HTTP 500")])
+        reply = self.agent(model).run_turn("loop")
+        self.assertIn("ran out of steps", reply)
+
+    def test_iteration_limit_empty_summary_retried_once(self):
+        self.s.max_iterations = 1
+        loop = {"role": "assistant", "content": None, "tool_calls": [tool_call("list_dir", {})]}
+        empty = {"role": "assistant", "content": ""}
+        model = FakeModel([loop, empty, empty])
+        self.assertEqual(self.agent(model).run_turn("loop"), agent_mod.EMPTY_SUMMARY)
+        self.assertEqual(len(model.calls), 3)
 
     def test_tool_output_is_clipped(self):
         self.s.tool_output_chars = 50
@@ -172,7 +198,224 @@ class AgentLoopTests(Base):
         self.assertIn("my cat is Biscuit", [m.get("content") for m in sent])
 
 
+def length(msg: dict) -> dict:
+    """A scripted reply that hit max_tokens."""
+    return dict(msg, _finish_reason="length")
+
+
+class CacheAndUsageTests(Base):
+    def test_system_prompt_is_stable_and_time_rides_in_user_message(self):
+        model = FakeModel([{"role": "assistant", "content": "one"}, {"role": "assistant", "content": "two"}])
+        self.agent(model).run_turn("first")
+        self.agent(model).run_turn("second")
+        first, second = model.calls
+        self.assertEqual(first[0], second[0], "system prompt must be byte-identical across turns")
+        self.assertNotIn("Local time", first[0]["content"])
+        self.assertRegex(first[1]["api_content"], r"^first\n\n\[sent \d{4}-\d\d-\d\d \d\d:\d\d")
+        # turn 2 replays turn 1 exactly as sent, so the cached prefix still matches
+        self.assertEqual(second[1], first[1])
+        sent = provider.build_payload(self.s, second, [])["messages"]
+        self.assertEqual(sent[1]["content"], first[1]["api_content"])
+        self.assertEqual(self.store.messages(self.sid)[0]["content"], "first")
+
+    def test_usage_is_logged(self):
+        usage = {"prompt_tokens": 1000, "completion_tokens": 50,
+                 "prompt_cache_hit_tokens": 900, "prompt_cache_miss_tokens": 100}
+        events = []
+        model = FakeModel([{"role": "assistant", "content": "hi", "_usage": usage}])
+        a = agent_mod.Agent(self.s, "k", self.store, self.sid, lambda s: False,
+                            on_event=lambda k, t: events.append((k, t)), chat_fn=model)
+        a.run_turn("hello")
+        self.assertEqual(self.store.usage_totals(self.sid),
+                         {"calls": 1, "prompt": 1000, "completion": 50, "cache_hit": 900, "cache_miss": 100})
+        self.assertIn(("usage", "1000 in (900 cached), 50 out"), events)
+        self.assertNotIn("_usage", self.store.messages(self.sid)[-1])
+
+
+class TruncationTests(Base):
+    def test_cut_off_tool_call_is_never_run(self):
+        target = self.tmp / "half.txt"
+        cut = length({"role": "assistant", "content": None,
+                      "tool_calls": [tool_call("write_file", {"path": str(target), "content": "x"})]})
+        model = FakeModel([cut] * 5)
+        reply = self.agent(model, approve=lambda s: True).run_turn("write a big file")
+        self.assertFalse(target.exists())
+        self.assertEqual(reply, agent_mod.TRUNCATED_FINAL)
+        self.assertEqual([k["max_tokens"] for k in model.kwargs], [None, 4096, 8192, 16384, 32768])
+        saved = self.store.messages(self.sid)
+        self.assertEqual([m["role"] for m in saved], ["user", "assistant"])
+        self.assertNotIn("tool_calls", saved[1])
+
+    def test_no_identical_retry_once_cap_is_maxed(self):
+        self.s.max_tokens_limit = 8192
+        cut = length({"role": "assistant", "content": None, "tool_calls": [tool_call("list_dir", {})]})
+        model = FakeModel([cut] * 3)
+        self.assertEqual(self.agent(model).run_turn("list"), agent_mod.TRUNCATED_FINAL)
+        # a 4th request at 8192 would be identical to the 3rd, so it isn't sent
+        self.assertEqual([k["max_tokens"] for k in model.kwargs], [None, 4096, 8192])
+
+    def test_cut_off_tool_call_recovers_with_more_room(self):
+        call = {"role": "assistant", "content": None, "tool_calls": [tool_call("list_dir", {})]}
+        model = FakeModel([length(call), call, {"role": "assistant", "content": "done"}])
+        self.assertEqual(self.agent(model).run_turn("list"), "done")
+        self.assertEqual([k["max_tokens"] for k in model.kwargs], [None, 4096, None])
+
+    def test_text_cut_off_is_continued_and_saved_as_one_reply(self):
+        model = FakeModel([
+            length({"role": "assistant", "content": "The first half"}),
+            {"role": "assistant", "content": "and the second half."},
+        ])
+        reply = self.agent(model).run_turn("tell me a long thing")
+        self.assertEqual(reply, "The first half\nand the second half.")
+        self.assertEqual(model.calls[1][-1]["content"], agent_mod.CONTINUE_NUDGE)
+        saved = self.store.messages(self.sid)
+        self.assertEqual([m["role"] for m in saved], ["user", "assistant"])
+        self.assertEqual(saved[1]["content"], reply)
+
+    def test_continuation_ceiling(self):
+        model = FakeModel([length({"role": "assistant", "content": f"part{i} "}) for i in range(4)])
+        reply = self.agent(model).run_turn("go on forever")
+        self.assertEqual(len(model.calls), 4)
+        self.assertTrue(reply.startswith("part0 part1 part2 part3"))
+        self.assertIn("still hitting max_tokens", reply)
+
+    def test_repetition_loop_is_dropped_not_continued(self):
+        loop = "I will now check the battery status for you.\n" * 40
+        model = FakeModel([length({"role": "assistant", "content": loop})])
+        reply = self.agent(model).run_turn("battery?")
+        self.assertEqual(reply, agent_mod.REPETITION_FINAL)
+        self.assertEqual(len(model.calls), 1)
+        self.assertNotIn(loop[:40], json.dumps(self.store.messages(self.sid)))
+
+
+class ToolCallFixTests(Base):
+    def test_duplicate_calls_in_one_reply_are_dropped(self):
+        a = {"id": "c1", "type": "function", "function": {"name": "read_file", "arguments": '{"path": "x", "max_bytes": 5}'}}
+        b = {"id": "c2", "type": "function", "function": {"name": "read_file", "arguments": '{"max_bytes":5,"path":"x"}'}}
+        model = FakeModel([{"role": "assistant", "content": None, "tool_calls": [a, b]},
+                           {"role": "assistant", "content": "ok"}])
+        self.agent(model).run_turn("read x")
+        sent = model.calls[1]
+        self.assertEqual(len(sent[-2]["tool_calls"]), 1)
+        self.assertEqual([m["tool_call_id"] for m in sent if m["role"] == "tool"], ["c1"])
+
+    def test_empty_reply_after_tools_gets_one_nudge(self):
+        model = FakeModel([
+            {"role": "assistant", "content": None, "tool_calls": [tool_call("list_dir", {})]},
+            {"role": "assistant", "content": ""},
+            {"role": "assistant", "content": "Here are the files."},
+        ])
+        reply = self.agent(model).run_turn("list")
+        self.assertEqual(reply, "Here are the files.")
+        self.assertEqual(model.calls[2][-1]["content"], agent_mod.EMPTY_AFTER_TOOLS_NUDGE)
+        saved = self.store.messages(self.sid)
+        self.assertEqual([m["role"] for m in saved], ["user", "assistant", "tool", "assistant"])
+
+    def test_empty_twice_gives_honest_message(self):
+        model = FakeModel([
+            {"role": "assistant", "content": None, "tool_calls": [tool_call("list_dir", {})]},
+            {"role": "assistant", "content": ""},
+            {"role": "assistant", "content": "  "},
+        ])
+        self.assertIn("returned an empty reply", self.agent(model).run_turn("list"))
+        self.assertEqual(len(model.calls), 3)
+
+    def test_tools_ok_counts_only_tools_that_ran(self):
+        model = FakeModel([
+            {"role": "assistant", "content": None, "tool_calls": [
+                tool_call("read_file", {"path": "missing.txt"}, "c1"),
+                tool_call("write_file", {"path": "w.txt", "content": "x"}, "c2"),
+                tool_call("list_dir", {}, "c3")]},
+            {"role": "assistant", "content": "ok"},
+        ])
+        a = self.agent(model, approve=lambda s: False)
+        a.run_turn("do things")
+        self.assertEqual(a.tools_ok, ["list_dir"])
+
+
+class GuardTests(Base):
+    def test_repeated_failure_gets_a_warning(self):
+        call = {"role": "assistant", "content": None, "tool_calls": [tool_call("read_file", {"path": "nope"})]}
+        model = FakeModel([call, call, {"role": "assistant", "content": "gave up"}])
+        self.agent(model).run_turn("read nope")
+        second = model.calls[2][-1]["content"]
+        self.assertIn("Tool loop warning: repeated_exact_failure_warning; count=2", second)
+
+    def test_identical_streak_halts_when_hard_stop(self):
+        loop = {"role": "assistant", "content": None, "tool_calls": [tool_call("list_dir", {})]}
+        model = FakeModel([loop] * 8)
+        a = agent_mod.Agent(self.s, "k", self.store, self.sid, lambda s: False, chat_fn=model, hard_stop=True)
+        reply = a.run_turn("loop")
+        self.assertTrue(reply.startswith("I stopped because I kept running list_dir 5 times"), reply)
+        self.assertEqual(len(model.calls), 5)
+        saved = self.store.messages(self.sid)
+        self.assertEqual(saved[-1]["content"], reply)
+        self.assertIn("Tool loop hard stop: identical_call_streak_halt", saved[-2]["content"])
+
+    def test_no_halt_without_hard_stop(self):
+        self.s.max_iterations = 6
+        loop = {"role": "assistant", "content": None, "tool_calls": [tool_call("list_dir", {})]}
+        model = FakeModel([loop] * 6 + [{"role": "assistant", "content": "summary"}])
+        self.assertEqual(self.agent(model).run_turn("loop"), "summary")
+        notes = [m["content"] for m in model.calls[-1] if m["role"] == "tool"]
+        self.assertIn("3rd consecutive identical call", notes[2])
+
+    def test_identical_big_result_becomes_stub(self):
+        (self.tmp / "big.txt").write_text("y" * 600, encoding="utf-8")
+        call = {"role": "assistant", "content": None, "tool_calls": [tool_call("read_file", {"path": "big.txt"})]}
+        model = FakeModel([call, call, {"role": "assistant", "content": "same"}])
+        self.agent(model).run_turn("read twice")
+        results = [m["content"] for m in model.calls[2] if m["role"] == "tool"]
+        self.assertTrue(results[0].startswith("y" * 600))
+        self.assertTrue(results[1].startswith("[note: this result is byte-identical"), results[1])
+
+
+class GuardUnitTests(unittest.TestCase):
+    def test_cycle_detection(self):
+        g = guardrails.Guard(hard_stop=True)
+        notices = []
+        for i in range(10):
+            tool = "list_dir" if i % 2 == 0 else "battery_status"
+            notices.append(g.observe_call(tool, {}, f"result-{tool}", f"c{i}", False)[0])
+        self.assertTrue(any("cycle of 2 tool calls" in n for n in notices))
+        self.assertEqual(g.halt.code, "identical_cycle_halt")
+
+    def test_mutation_resets_exact_failure_count(self):
+        g = guardrails.Guard(hard_stop=True)
+        for _ in range(5):
+            g.after_call("read_file", {"path": "a"}, "error: x", True)
+        self.assertFalse(g.before_call("read_file", {"path": "a"}).allows_execution)
+        g2 = guardrails.Guard(hard_stop=True)
+        for _ in range(5):
+            g2.after_call("read_file", {"path": "a"}, "error: x", True)
+        g2.after_call("write_file", {"path": "a", "content": "y"}, "wrote 1 bytes", False)
+        self.assertTrue(g2.before_call("read_file", {"path": "a"}).allows_execution)
+
+
+class RepetitionTests(unittest.TestCase):
+    def test_detects_loops_and_passes_normal_text(self):
+        self.assertFalse(is_repetition_dominated("short " * 10))
+        self.assertTrue(is_repetition_dominated("the same line again\n" * 50))
+        para = "".join(f"Sentence number {i} is different from the others. " for i in range(12))
+        self.assertTrue(is_repetition_dominated(para * 6))  # a long unit repeated exactly
+        normal = " ".join(f"word{i}" for i in range(400))
+        self.assertFalse(is_repetition_dominated(normal))
+
+
 class HistoryWindowTests(unittest.TestCase):
+    def test_window_start_stays_put_between_jumps(self):
+        hist, starts = [], []
+        for i in range(60):
+            hist += [{"role": "user", "content": f"question {i} " + "q" * 80},
+                     {"role": "assistant", "content": "a" * 120}]
+            win = recent_window(hist, 3000)
+            starts.append(win[0]["content"])
+            self.assertLessEqual(sum(len(json.dumps(m)) for m in win), 3000)
+        moved = [x != y for x, y in zip(starts, starts[1:])]
+        self.assertTrue(any(moved))
+        # a turn here is ~290 chars and a block is 750, so the start must hold for 2+ turns per jump
+        self.assertFalse(any(a and b for a, b in zip(moved, moved[1:])), "the start moved on consecutive turns")
+
     def test_window_starts_at_user_and_keeps_newest(self):
         hist = []
         for i in range(10):
@@ -240,11 +483,94 @@ def respond(code, obj):
     return fn
 
 
+OK_REPLY = {"choices": [{"finish_reason": "stop", "message": {"role": "assistant", "content": "hi"}}],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 1}}
+
+
+def sequence(*handlers):
+    """Serve each handler once, in order (the last one repeats)."""
+    state = {"n": 0}
+
+    def fn(h):
+        i = min(state["n"], len(handlers) - 1)
+        state["n"] += 1
+        handlers[i](h)
+    return fn
+
+
+def respond_headers(code, obj, headers):
+    def fn(h):
+        data = json.dumps(obj).encode()
+        h.send_response(code)
+        for k, v in headers.items():
+            h.send_header(k, v)
+        h.send_header("Content-Length", str(len(data)))
+        h.end_headers()
+        h.wfile.write(data)
+    return fn
+
+
+class ProviderRetryTests(unittest.TestCase):
+    def run_with(self, handler, retries=3):
+        srv = FakeServer(handler)
+        waits, notes = [], []
+        try:
+            s = Settings(base_url=srv.url, request_timeout=5, api_max_retries=retries)
+            try:
+                msg = provider.chat(s, "k", [{"role": "user", "content": "hi"}], [],
+                                    on_retry=lambda *a: notes.append(a), sleep=waits.append)
+            except provider.ProviderError as e:
+                msg = e
+            return msg, waits, notes
+        finally:
+            srv.close()
+
+    def test_5xx_then_success(self):
+        msg, waits, notes = self.run_with(sequence(respond(503, {}), respond(502, {}), respond(200, OK_REPLY)))
+        self.assertEqual(msg["content"], "hi")
+        self.assertEqual(len(waits), 2)
+        self.assertTrue(2 <= waits[0] <= 3 and 4 <= waits[1] <= 6, waits)  # 2*2^(n-1) plus 0-50% jitter
+        self.assertEqual(notes[0][:2], (1, 3))
+
+    def test_retry_after_header_wins(self):
+        msg, waits, _ = self.run_with(sequence(respond_headers(429, {}, {"Retry-After": "7"}), respond(200, OK_REPLY)))
+        self.assertEqual(waits, [7.0])
+
+    def test_retry_after_in_body_and_cap(self):
+        _, waits, _ = self.run_with(sequence(respond(429, {"error": {"message": "slow", "retry_after": 9999}}),
+                                             respond(200, OK_REPLY)))
+        self.assertEqual(waits, [provider.RETRY_AFTER_CAP_S])
+
+    def test_client_errors_are_not_retried(self):
+        for code in (400, 401, 402, 403, 404):
+            err, waits, _ = self.run_with(respond(code, {"error": {"message": "nope"}}))
+            self.assertIsInstance(err, provider.ProviderError)
+            self.assertEqual(waits, [], code)
+
+    def test_gives_up_after_max_retries(self):
+        err, waits, _ = self.run_with(respond(500, {}))
+        self.assertEqual(len(waits), 3)
+        self.assertIn("gave up after 3 retries", str(err))
+
+    def test_garbled_200_is_retried(self):
+        msg, waits, _ = self.run_with(sequence(respond(200, {"nope": 1}), respond(200, OK_REPLY)))
+        self.assertEqual(msg["content"], "hi")
+        self.assertEqual(len(waits), 1)
+
+    def test_backoff_numbers(self):
+        for n, (lo, hi) in {1: (2, 3), 2: (4, 6), 3: (8, 12), 6: (60, 90), 9: (60, 90)}.items():
+            w = provider.jittered_backoff(n)
+            self.assertTrue(lo <= w <= hi, (n, w))
+        self.assertEqual(provider.parse_retry_after("12"), 12.0)
+        self.assertIsNone(provider.parse_retry_after("soon"))
+        self.assertGreater(provider.parse_retry_after("Wed, 21 Oct 2099 07:28:00 GMT"), 0)
+
+
 class ProviderHttpTests(unittest.TestCase):
     def run_with(self, handler, timeout=5.0):
         srv = FakeServer(handler)
         try:
-            s = Settings(base_url=srv.url, request_timeout=timeout)
+            s = Settings(base_url=srv.url, request_timeout=timeout, api_max_retries=0)
             return provider.chat(s, "sk-test", [{"role": "user", "content": "hi"}], tools.schemas()), srv
         finally:
             srv.close()
@@ -281,7 +607,7 @@ class ProviderHttpTests(unittest.TestCase):
             self.run_with(slow, timeout=0.5)
 
     def test_unreachable(self):
-        s = Settings(base_url="http://127.0.0.1:9", request_timeout=3)
+        s = Settings(base_url="http://127.0.0.1:9", request_timeout=3, api_max_retries=0)
         with self.assertRaises(provider.ProviderError):
             provider.chat(s, "k", [{"role": "user", "content": "hi"}], [])
 

@@ -20,12 +20,14 @@ Make Chelys behave as much like Hermes Agent as a 32-bit phone allows. Port actu
 
 | File | Role |
 |---|---|
-| `chelys/agent.py` | turn loop, tool dispatch, limits, abort notes |
-| `chelys/provider.py` | DeepSeek HTTP client and message shaping |
+| `chelys/agent.py` | turn loop, tool dispatch, limits, truncation handling, grace call, abort notes |
+| `chelys/guardrails.py` | tool-loop guard (warn/block/halt thresholds from Hermes) |
+| `chelys/repetition.py` | detects repetition-dominated replies |
+| `chelys/provider.py` | DeepSeek HTTP client, retry/backoff, message shaping |
 | `chelys/tools.py` | tool schemas and handlers |
-| `chelys/store.py` | SQLite history and the history window |
+| `chelys/store.py` | SQLite history, block-trimmed history window, usage log |
 | `chelys/config.py` | settings, `config.toml`, key loading |
-| `chelys/cli.py` | `chat`, `ask`, `sessions`, `show`, `telegram` |
+| `chelys/cli.py` | `chat`, `ask`, `sessions`, `show`, `usage`, `telegram` |
 | `chelys/telegram.py` | Telegram long-polling bridge, owner-only, approval buttons (imported only by `chelys telegram`) |
 | `scripts/deploy.sh` | copy to the phone over SSH and run the tests there |
 | `docs/hermes/` | reading notes on Hermes's turn loop; [brain_summary.md](docs/hermes/brain_summary.md) holds the prioritized port list |
@@ -48,3 +50,5 @@ v0.1.0 works on the device. Verified on the phone on 2026-10-24 (SM-S102DL, Andr
 Not established yet: running unattended or overnight, surviving a reboot, and how often Android kills Termux.
 
 Telegram bridge: 39 tests pass on the PC and on the phone (fake Telegram API), including guests (`telegram_guests`: own conversation, risky tools always refused). It ran live on the phone on 2026-10-24 and the owner had a real chat through it. The approval buttons have not yet been pressed in a live test. Hermes's Telegram adapter (7,381 lines on python-telegram-bot, httpx and asyncio) was not portable, so its behavior was rebuilt with the standard library.
+
+Ported from Hermes since v0.1.0 (brain_summary items 1-8): model-call retries, cache-stable prompt, usage logging (`chelys usage`), truncation handling, tool-call fixes, grace call, loop guard, truthful Telegram `[used ...]` tag. 69 tests pass on the PC. Not yet re-verified live on the phone: cache hits, the grace path, and the long-wait Telegram notices. The running Telegram bridge predates this work until it is restarted.
