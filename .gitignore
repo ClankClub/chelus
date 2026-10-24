@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Runtime data: history and secrets live outside the repo, but never commit stray copies
+*.sqlite3
+*.sqlite3-journal
+*.db
+*.key
+*.token
+.env
+.env.*
+config.toml
+persona.md
+
+# Editors and OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

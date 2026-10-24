@@ -1,0 +1,21 @@
+Chelys is inspired by Hermes Agent:
+
+  Hermes Agent, Copyright (c) 2025 Nous Research, MIT License
+  https://github.com/NousResearch/hermes-agent
+  Reviewed at commit 99fcd6944360925943688d30c39ec9a490ccdeb1 (2026-10-24)
+
+Chelys is an independent project and is not affiliated with or endorsed by
+Nous Research. "Hermes Agent" is their name for their software.
+
+As of v0.1.0, Chelys contains no Hermes source files. It borrows design ideas:
+
+- the OpenAI-style tool schema and registry shape
+- a per-turn iteration budget
+- bounded tool output and error text returned to the model
+- a separate personality file (Hermes's SOUL.md)
+- DeepSeek replay rules that Hermes recorded: reasoning_content must be echoed,
+  padded with " ", in thinking mode, and empty-string content is rejected on
+  tool-call turns
+
+If Hermes code is brought over later, the files that contain it will keep
+Nous Research's copyright and MIT notice, and this file will list them.
