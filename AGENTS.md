@@ -16,6 +16,10 @@ Make Chelys behave as much like Hermes Agent as a 32-bit phone allows. Port actu
 - Mock tests are mocks. Claims that something works live need a run on the phone.
 - The repo is meant to become public. Keep personal details (IPs, hostnames beyond the `galaxy-a10e` alias, account info) out of it.
 
+## Porting from Hermes
+
+Port one subsystem at a time (memory, then skills, and so on), not all of Hermes at once. Read before implementing: read the Hermes source for that subsystem yourself rather than going from memory or a summary, and write notes in `docs/hermes/` as you go. Notes record what Hermes does, its real numbers and rules, and what Chelys should keep or drop for a phone. If you skip a file, say so in the notes and why. Finish with a short prioritized list of what to port, agree on it, then build. Rebuild behavior in your own words; don't paste Hermes code. Notes about "Chelys today" are snapshots, so update the summary, not old notes, when things change.
+
 ## Map
 
 | File | Role |
