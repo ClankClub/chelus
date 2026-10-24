@@ -1,6 +1,6 @@
 # Hermes's brain vs Chelys's brain
 
-The conclusion of a line-by-line read of Hermes Agent's turn loop (NousResearch/hermes-agent @ 99fcd69, MIT): `agent/conversation_loop.py` plus all 33 `agent/turn_*.py` files, about 15,000 lines. Detailed notes are in [conversation_loop.md](conversation_loop.md) and [turn_phases.md](turn_phases.md). This file is the current port list; it supersedes the shortlist in those notes.
+The conclusion of a line-by-line read of Hermes Agent's turn loop (NousResearch/hermes-agent @ 99fcd69, MIT): `agent/conversation_loop.py` plus all 33 `agent/turn_*.py` files, about 15,000 lines. Detailed notes are in [conversation_loop.md](conversation_loop.md), [turn_phases.md](turn_phases.md) and [run_agent.md](run_agent.md). This file is the current port list; it supersedes the shortlist in those notes.
 
 ## What the brain is
 
@@ -36,7 +36,7 @@ Each item gives the Hermes source, the size of the change in Chelys and why it m
 | 2 | **Cache-stable prompt.** Move `Local time` out of the system prompt and into the current user message, frozen per turn. Build the system prompt once per session. Trim the history window in blocks rather than one turn at a time. | turn_context, turn_request_assembly | ~30 lines across agent.py and store.py | The time is near the top of the prompt and changes every minute, so DeepSeek's prefix cache misses on the whole history almost every turn. The sliding window breaks the prefix again each time an old turn drops off. |
 | 3 | **Log usage.** One line per call (prompt, completion, cache hit and cache miss tokens) plus per-session totals. | turn_usage | ~20 lines | Verifies #2 and shows what each turn costs. Chelys currently throws `_usage` away. |
 | 4 | **Truncation handling.** Never run tool calls from a `finish_reason == "length"` response. Retry once with a bigger `max_tokens`, then tell the model to write less. For plain text cut off by the limit, ask it to continue (max 4 times) and save one joined reply. | turn_truncation | ~60 lines | `max_tokens=2048` cuts off long `write_file` calls and long answers. Today a cut-off call becomes a misleading "bad arguments" error, and long answers end mid-sentence. |
-| 5 | **Small tool-call fixes.** The unknown-tool error lists the valid names. Treat `""` arguments as `{}`. Detect cut-off arguments (no closing `}`) and say so. If the model returns an empty reply right after tool results, nudge it once. | turn_tool_validation, turn_empty_response | ~25 lines | Each one turns a dead end into a self-correction. |
+| 5 | **Small tool-call fixes.** The unknown-tool error lists the valid names. Treat `""` arguments as `{}`. Detect cut-off arguments (no closing `}`) and say so. Drop duplicate calls (same tool, same canonical arguments) within one response. If the model returns an empty reply right after tool results, nudge it once. | turn_tool_validation, turn_empty_response | ~25 lines | Each one turns a dead end into a self-correction. |
 | 6 | **Grace call at the iteration cap.** Instead of `[stopped: …]`, make one last call with tools disabled, asking for a summary of what was done. | turn_iteration_prep, turn_finalizer | ~15 lines | The user gets an answer instead of a dead stop. |
 | 7 | **Repetition guard.** Detect the model calling the same tool with the same arguments over and over, and stop it. | repetition_guard.py (stdlib, liftable under MIT) | lift + ~10 lines | Cheap protection against loops that burn the iteration budget. |
 | 8 | **Telegram `[used …]` tag.** Count only calls that actually succeeded. | turn_summary | ~5 lines | The tag currently lists calls that errored. |
@@ -50,4 +50,4 @@ Not porting: the provider zoo (Nous, Codex, Anthropic, Bedrock, Vertex, Copilot,
 
 ## Not read yet
 
-These are brain-adjacent files, to read when porting the piece that needs them: `agent/error_classifier.py` (1,577 lines, mostly provider-specific patterns), `agent/chat_completion_helpers.py` (4,014, request building), `agent/context_compressor.py` (5,744, for #12) and `run_agent.py` (1,564, the AIAgent object that holds the state).
+These are brain-adjacent files, to read when porting the piece that needs them: `agent/error_classifier.py` (1,577 lines, mostly provider-specific patterns), `agent/chat_completion_helpers.py` (4,014, request building), `agent/context_compressor.py` (5,744, for #12) and `agent/tool_guardrails.py` (the real loop guard, for #7). `run_agent.py` has been read; see [run_agent.md](run_agent.md).
