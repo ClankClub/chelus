@@ -414,24 +414,39 @@ class Agent:
         self.on_event("notice", f"summarizing {len(middle)} older messages to keep the history in budget")
         self._renew()
         try:
-            # No tools and no real output cap: Hermes leaves max_tokens off summary calls,
-            # because a hard cap truncates summaries.
-            msg = self.chat_fn(self.s, self.api_key, [{"role": "user", "content": prompt}], [],
-                               max_tokens=self.s.max_tokens_limit, on_retry=self._on_retry)
+            text = self._summarize(prompt)
+            if len(text) > compaction.summary_cap_chars(budget):
+                self.on_event("notice", f"summary is {len(text)} chars, over its budget; condensing it")
+                self._renew()
+                text = self._summarize(compaction.condense_prompt(text, budget))
         except provider.ProviderError as e:
             return self._compaction_failed(history, str(e))
-        usage = msg.pop("_usage", None)
-        if isinstance(usage, dict):
-            self._log_usage(usage)
-        text = (msg.get("content") or "").strip()
-        if msg.get("_finish_reason") == "length" or not text:
+        if not text:
             return self._compaction_failed(history, "the summary came back empty or cut off")
+        if len(text) > compaction.summary_cap_chars(budget):
+            return self._compaction_failed(history, f"the summary is still {len(text)} chars after condensing")
         text = compaction.add_pruned_skills(compaction.redact(text), middle, history[tail_start:])
         new = compaction.assemble(history, head_end, tail_start, text)
+        if history_chars(new) >= history_chars(history):
+            # Hermes rejects a compaction that would grow the transcript before committing it.
+            return self._compaction_failed(history, "the summary would not have made the history smaller")
         self.store.replace_active(self.session_id, new)
         self._compacted = True
         self.on_event("notice", f"history summarized: {history_chars(history)} -> {history_chars(new)} chars")
         return new
+
+    def _summarize(self, prompt: str) -> str:
+        """One summary call; "" when it comes back empty or cut off. No tools and no real
+        output cap: Hermes leaves max_tokens off summary calls, because a hard cap truncates
+        summaries."""
+        msg = self.chat_fn(self.s, self.api_key, [{"role": "user", "content": prompt}], [],
+                           max_tokens=self.s.max_tokens_limit, on_retry=self._on_retry)
+        usage = msg.pop("_usage", None)
+        if isinstance(usage, dict):
+            self._log_usage(usage)
+        if msg.get("_finish_reason") == "length":
+            return ""
+        return (msg.get("content") or "").strip()
 
     def _compaction_failed(self, history: list[dict[str, Any]], why: str) -> list[dict[str, Any]]:
         """History stays exactly as it was; compaction pauses (Hermes's failure cooldown)."""

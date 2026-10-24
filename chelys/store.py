@@ -436,9 +436,15 @@ def _holder_pid(holder: str | None) -> int | None:
         return None
 
 
+def row_chars(m: dict[str, Any]) -> int:
+    """Size of one row as sent. Keys starting with "_" never reach the model; counting
+    `_summary` measured every summary twice (it is also in the row's api_content)."""
+    return len(json.dumps({k: v for k, v in m.items() if not k.startswith("_")}, ensure_ascii=False))
+
+
 def history_chars(history: list[dict[str, Any]]) -> int:
     """Size of history as recent_window measures it."""
-    return sum(len(json.dumps(m, ensure_ascii=False)) for m in history)
+    return sum(row_chars(m) for m in history)
 
 
 def recent_window(history: list[dict[str, Any]], max_chars: int) -> list[dict[str, Any]]:
@@ -463,7 +469,7 @@ def recent_window(history: list[dict[str, Any]], max_chars: int) -> list[dict[st
         return []
     suffix = [0] * (len(history) + 1)
     for i in range(len(history) - 1, -1, -1):
-        suffix[i] = suffix[i + 1] + len(json.dumps(history[i], ensure_ascii=False))
+        suffix[i] = suffix[i + 1] + row_chars(history[i])
     block = max(1, max_chars // 4)
     pos = starts[0]
     while suffix[pos] > max_chars and pos != starts[-1]:

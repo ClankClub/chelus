@@ -282,6 +282,40 @@ class CompactionTests(Base):
         self.agent(model).run_turn("x")
         self.assertEqual(self.store.archived_count(self.sid), 0)
 
+    def test_oversized_summary_is_condensed_once(self):
+        fill(self.store, self.sid, 10)
+        cap = compaction.summary_cap_chars(2000)
+        model = FakeModel([{"role": "assistant", "content": "S" * (cap + 1)},
+                           {"role": "assistant", "content": "SUMMARY-SHORT"},
+                           {"role": "assistant", "content": "ok"}])
+        self.agent(model).run_turn("x")
+        self.assertIn("rewrite it", model.calls[1][0]["content"])
+        live = self.store.messages(self.sid)
+        self.assertEqual([m["_summary"] for m in live if "_summary" in m], ["SUMMARY-SHORT"])
+
+    def test_summary_still_oversized_after_condensing_changes_nothing(self):
+        fill(self.store, self.sid, 10)
+        big = {"role": "assistant", "content": "S" * (compaction.summary_cap_chars(2000) + 1)}
+        model = FakeModel([big, big, {"role": "assistant", "content": "ok"}])
+        self.agent(model).run_turn("x")
+        self.assertEqual(self.store.archived_count(self.sid), 0)
+        self.assertGreater(self.store.compact_retry_at(self.sid), time.time() + 500)
+
+    def test_summary_that_would_grow_the_history_is_rejected(self):
+        # The phone's loop: a summary nearly as big as the budget made every pass a net loss.
+        fill(self.store, self.sid, 10)
+        before = self.store.messages(self.sid)
+        model = FakeModel([{"role": "assistant", "content": "S" * history_chars(before)},
+                           {"role": "assistant", "content": "ok"}])
+        self.agent(model).run_turn("x")
+        self.assertEqual(self.store.archived_count(self.sid), 0)
+        self.assertEqual(self.store.messages(self.sid)[:len(before)], before)
+
+    def test_update_prompt_asks_to_stay_within_budget(self):
+        prompt = compaction.build_prompt("turns", 2000, "OLD", "2026-10-24")
+        self.assertIn("must stay about 2000 tokens", prompt)
+        self.assertNotIn("Drop only what is clearly obsolete", prompt)
+
     def test_small_history_and_disabled_setting_do_nothing(self):
         fill(self.store, self.sid, 2)
         model = FakeModel([{"role": "assistant", "content": "ok"}])
@@ -310,6 +344,11 @@ class CompactionUnitTests(unittest.TestCase):
         hist = [{"role": "user", "content": "u" * 400, "_summary": "s"}, {"role": "assistant", "content": "a" * 400}]
         hist += [{"role": "user", "content": "u" * 400}, {"role": "assistant", "content": "a" * 400}] * 8
         self.assertEqual(compaction.plan(hist, 4000)[0], 0)
+
+    def test_summary_is_measured_once(self):
+        # _summary never goes to the model; the same text is already in api_content.
+        row = {"role": "user", "content": "hi", "api_content": "S" * 1000 + "hi", "_summary": "S" * 1000}
+        self.assertLess(history_chars([row]), 1200)
 
     def test_redaction(self):
         text = ("key sk-abcdefghijklmnopqrstuvwx, bot 123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsawQ, "

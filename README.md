@@ -208,7 +208,7 @@ The tests use a fake model and a fake local HTTP server. They never call DeepSee
 
 **Saved as it happens.** Each message is written to the database as the turn goes: the user message first, a tool request before its tool runs, each result as it arrives. A turn that is cancelled, fails, or dies with the phone is closed with a note saying which tools may already have run, so the history never pretends an action didn't happen.
 
-**History is summarized, not dropped.** When the conversation would no longer fit in `history_chars`, the model summarizes the older middle into fixed sections (open request, goal, constraints, completed actions and so on), and the summary rides along with the first message after it. The first turn and the most recent turns stay word for word. Old rows are archived in the database, not deleted. If summarizing fails, nothing changes and it tries again 10 minutes later.
+**History is summarized, not dropped.** When the conversation would no longer fit in `history_chars`, the model summarizes the older middle into fixed sections (open request, goal, constraints, completed actions and so on), and the summary rides along with the first message after it. The first turn and the most recent turns stay word for word. Old rows are archived in the database, not deleted. A summary over twice its size budget gets one pass to condense it, and a summary that wouldn't make the history smaller is thrown away. If summarizing fails, nothing changes and it tries again 10 minutes later.
 
 **One turn at a time.** The terminal and the Telegram bridge can share a conversation, but each turn takes a lease on it, and a second process gets a "busy" error instead of interleaving turns.
 
