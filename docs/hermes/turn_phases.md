@@ -3,6 +3,8 @@
 Source: NousResearch/hermes-agent @ 99fcd69, MIT. 33 files, ~13,000 lines. Read in the order a turn runs.
 See [conversation_loop.md](conversation_loop.md) for the conductor.
 
+The "Chelys today" notes describe Chelys before the port: atomic turns, no compaction, no lease. For what Chelys does now, see [brain_summary.md](brain_summary.md).
+
 ## turn_iteration_prep.py (566 lines) — top of each iteration
 
 **begin_iteration**: apply a pending mid-turn correction; stop if interrupted; count the call against the iteration budget. When the budget is exhausted, the model gets one **toolless grace call** (`_budget_grace_call`). An optional warning was considered and rejected as an extension: "the warning never extends the hard budget."

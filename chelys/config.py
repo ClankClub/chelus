@@ -23,12 +23,18 @@ class Settings:
     model: str = "deepseek-flash"
     thinking: bool = False
     max_tokens: int = 2048
-    request_timeout: float = 60.0
+    request_timeout: float = 60.0      # longest wait for any single socket read
+    request_deadline: float = 300.0    # longest a whole model request may take
     # Transient failures (429, 5xx, timeouts, network) are retried this many times.
     api_max_retries: int = 3
     # Ceiling for the boosted max_tokens used when a tool call is cut off (Hermes: 32768 when the
     # model limit is unknown; DeepSeek accepted up to 393216 in a live test on 2026-10-24).
     max_tokens_limit: int = 32768
+    # Telegram only: after retries run out on an outage (5xx, timeout, network), wait and try
+    # again this many times with a countdown in the chat (Hermes's auto-recovery). 0 disables.
+    autorecover_cycles: int = 5
+    # Fold older conversation into a summary instead of letting it fall out of the window.
+    compaction: bool = True
     # Loop limits
     max_iterations: int = 8
     tool_output_chars: int = 6000

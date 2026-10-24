@@ -166,7 +166,7 @@ class AgentLoopTests(Base):
         self.assertEqual(target.read_text(encoding="utf-8"), "hey")
         self.assertIn("write_file", asked[0])
 
-    def test_provider_error_saves_note_not_half_turn(self):
+    def test_provider_error_keeps_what_ran_and_adds_note(self):
         model = FakeModel([
             {"role": "assistant", "content": None, "tool_calls": [tool_call("list_dir", {})]},
             provider.ProviderError("model request timed out after 60s"),
@@ -174,9 +174,10 @@ class AgentLoopTests(Base):
         with self.assertRaises(provider.ProviderError):
             self.agent(model).run_turn("list stuff")
         saved = self.store.messages(self.sid)
-        self.assertEqual([m["role"] for m in saved], ["user", "assistant"])
-        self.assertIn("timed out", saved[1]["content"])
-        self.assertIn("list_dir", saved[1]["content"])
+        self.assertEqual([m["role"] for m in saved], ["user", "assistant", "tool", "assistant"])
+        self.assertIn("timed out", saved[-1]["content"])
+        self.assertIn("list_dir", saved[-1]["content"])
+        self.assertIn("may already have run", saved[-1]["content"])
 
     def test_ctrl_c_saves_note_and_reraises(self):
         model = FakeModel([KeyboardInterrupt()])

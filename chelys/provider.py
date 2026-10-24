@@ -24,13 +24,18 @@ from .config import Settings
 class ProviderError(Exception):
     """A failed model request, with a message safe to show the user.
 
-    retryable: a transient failure (429, 5xx, timeout, network, garbled 200) worth retrying.
+    retryable: worth retrying now (429, 5xx, timeout, network, garbled 200).
+    transient: the provider is only temporarily away (5xx, timeout, network, garbled 200), so
+      a longer wait may still work. 429 is retryable but not transient, as in Hermes's
+      auto-recovery ladder: a rate limit is a signal to slow down, not an outage.
     retry_after: seconds the server asked us to wait, if it said.
     """
 
-    def __init__(self, message: str, *, retryable: bool = False, retry_after: float | None = None):
+    def __init__(self, message: str, *, retryable: bool = False, transient: bool = False,
+                 retry_after: float | None = None):
         super().__init__(message)
         self.retryable = retryable
+        self.transient = transient
         self.retry_after = retry_after
 
 
@@ -47,10 +52,11 @@ RETRYABLE_STATUS = frozenset({408, 429})
 OnRetry = Callable[[int, int, float, str], None]  # (attempt, max_retries, wait_s, error)
 
 
-def jittered_backoff(attempt: int, base: float = BACKOFF_BASE_S, cap: float = BACKOFF_MAX_S) -> float:
-    """min(base * 2^(attempt-1), cap) plus 0-50% random jitter. attempt is 1-based."""
+def jittered_backoff(attempt: int, base: float = BACKOFF_BASE_S, cap: float = BACKOFF_MAX_S,
+                     jitter: float = 0.5) -> float:
+    """min(base * 2^(attempt-1), cap) plus 0 to jitter*100% random jitter. attempt is 1-based."""
     delay = min(base * 2 ** max(0, attempt - 1), cap)
-    return delay + random.uniform(0, 0.5 * delay)
+    return delay + random.uniform(0, jitter * delay)
 
 
 def parse_retry_after(value: Any) -> float | None:
@@ -138,7 +144,8 @@ def chat(
         except ProviderError as e:
             if not e.retryable or attempt >= s.api_max_retries:
                 if attempt:
-                    raise ProviderError(f"{e} (gave up after {attempt} retries)") from None
+                    raise ProviderError(f"{e} (gave up after {attempt} retries)", retryable=e.retryable,
+                                        transient=e.transient, retry_after=e.retry_after) from None
                 raise
             attempt += 1
             if e.retry_after is not None:
@@ -165,9 +172,10 @@ def _chat_once(
         },
     )
     timed_out = f"model request timed out after {s.request_timeout:g}s"
+    deadline = time.monotonic() + s.request_deadline
     try:
         with urllib.request.urlopen(req, timeout=s.request_timeout, context=ssl.create_default_context()) as resp:
-            raw = resp.read()
+            raw = _read_until(resp, deadline, s.request_deadline)
     except urllib.error.HTTPError as e:
         try:
             err = _http_error(e)
@@ -175,14 +183,21 @@ def _chat_once(
             e.close()
         raise err from None
     except (TimeoutError, socket.timeout):
-        raise ProviderError(timed_out, retryable=True) from None
+        raise ProviderError(timed_out, retryable=True, transient=True) from None
     except urllib.error.URLError as e:
         reason = e.reason
         if isinstance(reason, (TimeoutError, socket.timeout)):
-            raise ProviderError(timed_out, retryable=True) from None
-        raise ProviderError(f"could not reach {s.base_url}: {reason}", retryable=True) from None
+            raise ProviderError(timed_out, retryable=True, transient=True) from None
+        if isinstance(reason, ssl.SSLCertVerificationError):
+            # Deterministic (Hermes's error_classifier fails fast on these): retrying can't help.
+            raise ProviderError(f"TLS certificate check failed for {s.base_url}: {getattr(reason, 'verify_message', None) or reason}. "
+                                "Check the phone's date and time.") from None
+        raise ProviderError(f"could not reach {s.base_url}: {reason}", retryable=True, transient=True) from None
+    except ssl.SSLCertVerificationError as e:
+        raise ProviderError(f"TLS certificate check failed for {s.base_url}: {getattr(e, 'verify_message', None) or e}. "
+                            "Check the phone's date and time.") from None
     except OSError as e:
-        raise ProviderError(f"network error talking to {s.base_url}: {e}", retryable=True) from None
+        raise ProviderError(f"network error talking to {s.base_url}: {e}", retryable=True, transient=True) from None
 
     try:
         data = json.loads(raw)
@@ -191,7 +206,7 @@ def _chat_once(
     except (ValueError, KeyError, IndexError, TypeError):
         # Hermes treats a 200 without choices like a transient server error ("empty
         # responses often mean rate limiting"), so it is retried.
-        raise ProviderError(f"unexpected response from model API: {raw[:300]!r}", retryable=True) from None
+        raise ProviderError(f"unexpected response from model API: {raw[:300]!r}", retryable=True, transient=True) from None
 
     out: dict[str, Any] = {"role": "assistant", "content": message.get("content")}
     if message.get("tool_calls"):
@@ -208,6 +223,25 @@ def _chat_once(
     out["_finish_reason"] = choice.get("finish_reason")
     out["_usage"] = data.get("usage")
     return out
+
+
+def _read_until(resp: Any, deadline: float, total: float) -> bytes:
+    """Read the body, but give up once the whole request has taken longer than `total`.
+
+    urllib's timeout covers each socket read, not the request, so a server trickling a
+    byte at a time could hold the single-threaded bridge forever. read1 returns whatever
+    has arrived, so the deadline is checked between chunks; a check can be late by at most
+    one socket timeout.
+    """
+    chunks = []
+    while True:
+        if time.monotonic() > deadline:
+            raise ProviderError(f"model request took longer than {total:g}s in total",
+                                retryable=True, transient=True)
+        chunk = resp.read1(65536)
+        if not chunk:
+            return b"".join(chunks)
+        chunks.append(chunk)
 
 
 def _http_error(e: urllib.error.HTTPError) -> ProviderError:
@@ -237,4 +271,5 @@ def _http_error(e: urllib.error.HTTPError) -> ProviderError:
         text += ": DeepSeek server error"
     if detail:
         text += f" ({str(detail)[:300]})"
-    return ProviderError(text, retryable=e.code in RETRYABLE_STATUS or e.code >= 500, retry_after=retry_after)
+    return ProviderError(text, retryable=e.code in RETRYABLE_STATUS or e.code >= 500,
+                         transient=e.code == 408 or e.code >= 500, retry_after=retry_after)

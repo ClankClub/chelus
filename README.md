@@ -46,7 +46,7 @@ chelys usage                # token and cache-hit totals per conversation
 chelys telegram             # run the Telegram bot bridge (see below)
 ```
 
-In chat: `/new`, `/quit` and `/help`. Ctrl-C cancels the current reply; at the prompt it exits.
+In chat: `/new`, `/quit` and `/help`. Ctrl-C cancels the current reply; at the prompt it exits. If DeepSeek is still down after the normal retries, chat waits and tries again a few times with a countdown; Ctrl-C stops that too.
 
 | Exit code | Meaning |
 |---|---|
@@ -76,7 +76,7 @@ Chat with Chelys from Telegram. The phone polls Telegram over HTTPS, so it needs
 
 The bot answers only your user ID in a private chat and drops everything else unread.
 
-**Guests.** To let someone else chat with it, put their numeric user ID in `~/.config/chelys/telegram_guests`, one per line (`#` comments are fine), then restart the bridge. Guests get their own conversation and the safe tools. Risky tools are always refused for guests, and no approval buttons are shown. Remove the line and restart to revoke access. Guests use your DeepSeek key. Risky tools ask for approval with Yes/No buttons. An unanswered request counts as No after 3 minutes. Replies list the tools used. `/new` starts a fresh conversation and `/help` shows the commands. The Telegram conversation is separate from terminal chat and survives restarts.
+**Guests.** To let someone else chat with it, put their numeric user ID in `~/.config/chelys/telegram_guests`, one per line (`#` comments are fine), then restart the bridge. Guests get their own conversation and the safe tools. Risky tools are always refused for guests, and no approval buttons are shown. Remove the line and restart to revoke access. Guests use your DeepSeek key. Risky tools ask for approval with Yes/No buttons. An unanswered request counts as No after 3 minutes. Replies list the tools used. `/new` starts a fresh conversation and `/help` shows the commands. If DeepSeek stays down after the normal retries, the bot posts a countdown and tries again up to 5 times, 15 to 60 seconds apart; `/stop` cancels the wait. The Telegram conversation is separate from terminal chat and survives restarts.
 
 The bridge runs only while that Termux session is alive, and Android may kill Termux in the background. `termux-wake-lock` and turning off battery optimization for Termux help, but neither is a guarantee. Running unattended has not been tested yet.
 
@@ -105,7 +105,8 @@ base_url = "https://api.deepseek.com"
 model = "deepseek-flash"      # DeepSeek renames models often; check their docs
 thinking = false              # sends {"thinking": {"type": "disabled"}}
 max_tokens = 2048
-request_timeout = 60.0
+request_timeout = 60.0        # longest wait for any single read from the API
+request_deadline = 300.0      # longest a whole model request may take
 api_max_retries = 3           # transient errors (429, 5xx, timeouts) are retried with backoff
 max_tokens_limit = 32768      # ceiling when a cut-off reply is retried with a bigger max_tokens
 max_iterations = 8            # model steps per message
@@ -113,6 +114,8 @@ tool_output_chars = 6000
 shell_timeout = 30.0
 read_file_bytes = 65536
 history_chars = 40000         # how much past conversation is sent each turn
+compaction = true             # summarize older history instead of dropping it
+autorecover_cycles = 5        # Telegram and chat: wait out an outage this many times; 0 disables
 workdir = "/data/data/com.termux/files/home"
 ```
 
@@ -142,7 +145,11 @@ The tests use a fake model and a fake local HTTP server. They never call DeepSee
 
 **No SDK.** The `openai` package depends on Rust-built wheels (`pydantic-core`, `jiter`) that don't install on 32-bit Termux. DeepSeek's API is OpenAI-format JSON over HTTPS, so `urllib` covers it.
 
-**Turns are atomic.** A turn is saved all at once. If it is cancelled or the API fails, the history gets the user message plus a short note naming any tools that already ran. Each request sends the newest slice of history that fits in `history_chars`, and that slice always starts at a user message.
+**Saved as it happens.** Each message is written to the database as the turn goes: the user message first, a tool request before its tool runs, each result as it arrives. A turn that is cancelled, fails, or dies with the phone is closed with a note saying which tools may already have run, so the history never pretends an action didn't happen.
+
+**History is summarized, not dropped.** When the conversation would no longer fit in `history_chars`, the model summarizes the older middle into fixed sections (open request, goal, constraints, completed actions and so on), and the summary rides along with the first message after it. The first turn and the most recent turns stay word for word. Old rows are archived in the database, not deleted. If summarizing fails, nothing changes and it tries again 10 minutes later.
+
+**One turn at a time.** The terminal and the Telegram bridge can share a conversation, but each turn takes a lease on it, and a second process gets a "busy" error instead of interleaving turns.
 
 **DeepSeek quirks.** Both are handled in `provider.py`, following lessons Hermes recorded:
 

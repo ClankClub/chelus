@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from chelys import telegram
+from chelys import provider, telegram
 from chelys.config import ConfigError
 from chelys.store import Store
 from tests.test_agent import FakeModel, make_settings, tool_call
@@ -77,8 +77,8 @@ class BridgeTests(unittest.TestCase):
         model = FakeModel(replies)
 
         class Factory(telegram.AgentFactory):
-            def __call__(self, user, approve, on_event):
-                a = super().__call__(user, approve, on_event)
+            def __call__(self, user, approve, on_event, **kw):
+                a = super().__call__(user, approve, on_event, **kw)
                 a.chat_fn = model
                 return a
 
@@ -198,6 +198,24 @@ class BridgeTests(unittest.TestCase):
         self.assertEqual(model.calls, [])
         self.assertTrue(bot.texts()[0].startswith("Chelys"))
         self.assertTrue(bot.texts()[1].startswith("Started conversation #"))
+
+    def test_outage_countdown_then_recovery(self):
+        down = provider.ProviderError("HTTP 503", retryable=True, transient=True, retry_after=0)
+        bot, _, _ = self.run_bridge([[msg(1, OWNER, "hi")]], [down, {"role": "assistant", "content": "back"}])
+        self.assertTrue(bot.texts()[0].startswith("[waiting] DeepSeek is unavailable (HTTP 503)"))
+        self.assertIn("/stop", bot.texts()[0])
+        self.assertEqual(bot.texts()[-1], "back")
+
+    def test_stop_cancels_the_wait(self):
+        down = provider.ProviderError("HTTP 503", retryable=True, transient=True)
+        bot, model, _ = self.run_bridge([[msg(1, OWNER, "hi")], [msg(2, OWNER, "/stop")]], [down])
+        self.assertIn("Stopped retrying.", bot.texts())
+        self.assertIn("cancelled with /stop", bot.texts()[-1])
+        self.assertEqual(len(model.calls), 1)
+
+    def test_stop_with_nothing_running(self):
+        bot, _, _ = self.run_bridge([[msg(1, OWNER, "/stop")]], [])
+        self.assertEqual(bot.texts(), ["Nothing to stop right now."])
 
     def test_session_survives_restart(self):
         f1 = telegram.AgentFactory(self.s, "k", self.store, OWNER)

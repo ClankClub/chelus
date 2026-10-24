@@ -9,7 +9,7 @@ import time
 from . import __version__, provider
 from .agent import Agent
 from .config import ConfigError, Settings, load_api_key, load_settings
-from .store import Store
+from .store import SessionBusy, Store
 
 EXIT_OK, EXIT_PROVIDER, EXIT_CONFIG, EXIT_INTERRUPT = 0, 1, 2, 130
 
@@ -28,6 +28,14 @@ def _ask_permission(summary: str) -> bool:
     except EOFError:
         return False
     return answer.strip().lower() in ("y", "yes")
+
+
+def _wait_out(seconds: float, cycle: int, total: int, error: str) -> bool:
+    """Interactive chat waits out an outage too; Ctrl-C cancels the wait and the turn."""
+    _event("wait", f"DeepSeek is unavailable ({error}); retrying automatically in {seconds:.0f}s "
+                   f"(try {cycle}/{total}); Ctrl-C to cancel")
+    time.sleep(seconds)
+    return True
 
 
 def _pick_session(store: Store, new: bool, session: int | None) -> int:
@@ -49,7 +57,7 @@ def cmd_chat(s: Settings, args: argparse.Namespace) -> int:
         print(f"Chelys {__version__} | {s.model} | conversation #{sid}"
               f"{f' (resumed, {past} messages)' if past else ' (new)'}")
         print(CHAT_HELP)
-        agent = Agent(s, key, store, sid, _ask_permission, _event)
+        agent = Agent(s, key, store, sid, _ask_permission, _event, autorecover=_wait_out)
         while True:
             try:
                 line = input("you> ").strip()
@@ -72,7 +80,7 @@ def cmd_chat(s: Settings, args: argparse.Namespace) -> int:
             except KeyboardInterrupt:
                 print("\n[cancelled]")
                 continue
-            except provider.ProviderError as e:
+            except (provider.ProviderError, SessionBusy) as e:
                 print(f"[error] {e}")
                 continue
             print(f"bot> {reply}")
@@ -92,7 +100,7 @@ def cmd_ask(s: Settings, args: argparse.Namespace) -> int:
         agent = Agent(s, key, store, sid, approve, _event)
         try:
             reply = agent.run_turn(" ".join(args.text))
-        except provider.ProviderError as e:
+        except (provider.ProviderError, SessionBusy) as e:
             print(f"[error] {e}", file=sys.stderr)
             return EXIT_PROVIDER
         print(reply)
@@ -122,6 +130,9 @@ def cmd_show(s: Settings, args: argparse.Namespace) -> int:
         if sid is None or not store.session_exists(sid):
             print("no such conversation")
             return EXIT_CONFIG
+        archived = store.archived_count(sid)
+        if archived:
+            print(f"[{archived} older messages were summarized; the summary rides with the first message below]")
         for m in store.messages(sid):
             role = m.get("role")
             if role == "tool":

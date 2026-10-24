@@ -21,7 +21,7 @@ from typing import Any
 from . import provider
 from .agent import Agent
 from .config import ConfigError, Settings, load_api_key
-from .store import Store
+from .store import SessionBusy, Store
 
 API = "https://api.telegram.org"
 MAX_TEXT = 4000            # Telegram's limit is 4096 characters; leave room
@@ -32,6 +32,7 @@ HELP = (
     "Chelys, on the phone.\n"
     "Just talk to me. Commands:\n"
     "/new  start a fresh conversation\n"
+    "/stop  cancel an automatic retry while DeepSeek is down\n"
     "/help  this message"
 )
 
@@ -223,6 +224,28 @@ class Bridge:
         except (TelegramError, KeyError):
             pass
 
+    # ---- waiting out an outage ------------------------------------------
+
+    def wait_out(self, chat_id: int, user: int, seconds: float, cycle: int, total: int, error: str) -> bool:
+        """One auto-recovery wait with a countdown in the chat. Keeps polling Telegram so
+        /stop from the person whose turn it is cancels it; other messages wait their turn.
+        Returns False if stopped."""
+        self.bot.send(chat_id, f"[waiting] DeepSeek is unavailable ({error}). Retrying automatically in "
+                               f"{seconds:.0f}s (try {cycle}/{total}). Send /stop to cancel.")
+        deadline = time.monotonic() + seconds
+        while time.monotonic() < deadline:
+            wait = max(1, min(POLL_SECONDS, int(deadline - time.monotonic())))
+            for u in self._fetch(wait):
+                if self._is_owner_message(u):
+                    m = u["message"]
+                    if (m.get("text") or "").strip().split("@")[0].lower() == "/stop" and m["from"]["id"] == user:
+                        self.bot.send(chat_id, "Stopped retrying.")
+                        return False
+                    self.pending.append(m)
+                elif self._is_owner_callback(u):
+                    self._answer_callback(u["callback_query"], "That request has expired.")
+        return True
+
     # ---- handling owner messages ---------------------------------------
 
     def handle(self, m: dict[str, Any]) -> None:
@@ -240,6 +263,9 @@ class Bridge:
         if command == "/new":
             sid = self.make_agent.new_session(user)
             self.bot.send(chat_id, f"Started conversation #{sid}.")
+            return
+        if command == "/stop":
+            self.bot.send(chat_id, "Nothing to stop right now.")
             return
 
         def on_event(kind: str, detail: str) -> None:
@@ -259,14 +285,17 @@ class Bridge:
                 self.log(f"[telegram] refused risky tool for guest {user}: {summary}")
                 return False  # guests never get risky tools
 
-        agent = self.make_agent(user, approve, on_event)
+        def autorecover(seconds: float, cycle: int, total: int, error: str) -> bool:
+            return self.wait_out(chat_id, user, seconds, cycle, total, error)
+
+        agent = self.make_agent(user, approve, on_event, autorecover=autorecover)
         try:
             self.bot.call("sendChatAction", {"chat_id": chat_id, "action": "typing"})
         except TelegramError:
             pass
         try:
             reply = agent.run_turn(text)
-        except provider.ProviderError as e:
+        except (provider.ProviderError, SessionBusy) as e:
             self.bot.send(chat_id, f"[error] {e}")
             return
         if agent.tools_ok:  # only tools that actually ran, not denied or failed calls
@@ -329,9 +358,11 @@ class AgentFactory:
         path.write_text(str(sid))
         return sid
 
-    def __call__(self, user: int, approve, on_event) -> Agent:
-        # Unattended surface: the loop guard may stop a turn (Hermes does the same on its gateway).
-        return Agent(self.s, self.api_key, self.store, self.session_for(user), approve, on_event, hard_stop=True)
+    def __call__(self, user: int, approve, on_event, autorecover=None) -> Agent:
+        # Unattended surface: the loop guard may stop a turn, and outages are waited out
+        # (Hermes does both on its gateway).
+        return Agent(self.s, self.api_key, self.store, self.session_for(user), approve, on_event,
+                     hard_stop=True, autorecover=autorecover)
 
 
 def run(s: Settings) -> int:
