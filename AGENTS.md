@@ -28,6 +28,7 @@ Make Chelys behave as much like Hermes Agent as a 32-bit phone allows. Port actu
 | `chelys/cli.py` | `chat`, `ask`, `sessions`, `show`, `telegram` |
 | `chelys/telegram.py` | Telegram long-polling bridge, owner-only, approval buttons (imported only by `chelys telegram`) |
 | `scripts/deploy.sh` | copy to the phone over SSH and run the tests there |
+| `docs/hermes/` | reading notes on Hermes's turn loop; [brain_summary.md](docs/hermes/brain_summary.md) holds the prioritized port list |
 
 Phone access from the dev PC: `ssh galaxy-a10e`.
 
