@@ -2,6 +2,11 @@
 
 Risky tools (writing files, running shell commands) go through the agent's permission
 callback before they run. Arbitrary shell access is not a sandbox; the gate is the safety.
+
+File tools never touch Chelys's own config and data directories (API key, bot token,
+history, skills) or ~/.ssh, for anyone. Skills are read and written through the skill
+tools, which have their own checks. Guests are further limited to non-hidden paths under
+the working directory.
 """
 
 from __future__ import annotations
@@ -14,6 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
+from . import approval
 from .config import Settings
 
 
@@ -26,8 +32,10 @@ class Tool:
     name: str
     description: str
     parameters: dict[str, Any]
-    handler: Callable[[Settings, dict[str, Any]], str]
+    handler: Callable[..., str]    # (settings, args, ctx=None) -> output
     risky: bool = False
+    group: str = "core"            # "skills": owner only, never offered to guests
+    max_output: int | None = None  # output cap, if not tool_output_chars
 
     def schema(self) -> dict[str, Any]:
         return {
@@ -36,17 +44,41 @@ class Tool:
         }
 
 
-def _resolve(s: Settings, path: str) -> Path:
+def _inside(path: str, root: str) -> bool:
+    path, root = os.path.normcase(path), os.path.normcase(root)
+    try:
+        return os.path.commonpath([path, root]) == root
+    except ValueError:  # different drives on Windows
+        return False
+
+
+def off_limits(s: Settings) -> list[Path]:
+    return [s.config_dir, s.data_dir, Path.home() / ".ssh"]
+
+
+def _resolve(s: Settings, path: Any, ctx: Any = None) -> Path:
+    """The real path a file tool may touch, or ToolError. Symlinks are followed before the
+    check, so a link can't lead into a blocked directory."""
     if not isinstance(path, str) or not path.strip():
         raise ToolError("path must be a non-empty string")
     p = Path(os.path.expanduser(path))
     if not p.is_absolute():
         p = Path(s.workdir) / p
-    return p
+    real = os.path.realpath(p)
+    for root in off_limits(s):
+        if _inside(real, os.path.realpath(root)):
+            raise ToolError(f"{p} is off limits: that directory holds Chelys's keys, settings, history "
+                            "or skills. Use skills_list and skill_view for skills.")
+    if getattr(ctx, "guest", False):
+        work = os.path.realpath(s.workdir)
+        rel = os.path.relpath(real, work) if _inside(real, work) else None
+        if rel is None or any(part.startswith(".") and part != "." for part in Path(rel).parts):
+            raise ToolError(f"{p} is outside what guests can see (non-hidden files under {s.workdir})")
+    return Path(real)
 
 
-def _list_dir(s: Settings, args: dict[str, Any]) -> str:
-    p = _resolve(s, args.get("path") or ".")
+def _list_dir(s: Settings, args: dict[str, Any], ctx: Any = None) -> str:
+    p = _resolve(s, args.get("path") or ".", ctx)
     if not p.is_dir():
         raise ToolError(f"not a directory: {p}")
     rows = []
@@ -61,8 +93,8 @@ def _list_dir(s: Settings, args: dict[str, Any]) -> str:
     return f"{p}\n" + ("\n".join(rows) if rows else "(empty)")
 
 
-def _read_file(s: Settings, args: dict[str, Any]) -> str:
-    p = _resolve(s, args.get("path"))
+def _read_file(s: Settings, args: dict[str, Any], ctx: Any = None) -> str:
+    p = _resolve(s, args.get("path"), ctx)
     if not p.is_file():
         raise ToolError(f"not a file: {p}")
     with p.open("rb") as f:
@@ -73,8 +105,8 @@ def _read_file(s: Settings, args: dict[str, Any]) -> str:
     return text
 
 
-def _write_file(s: Settings, args: dict[str, Any]) -> str:
-    p = _resolve(s, args.get("path"))
+def _write_file(s: Settings, args: dict[str, Any], ctx: Any = None) -> str:
+    p = _resolve(s, args.get("path"), ctx)
     content = args.get("content")
     if not isinstance(content, str):
         raise ToolError("content must be a string")
@@ -85,7 +117,7 @@ def _write_file(s: Settings, args: dict[str, Any]) -> str:
     return f"wrote {len(content.encode('utf-8'))} bytes to {p}"
 
 
-def _run_shell(s: Settings, args: dict[str, Any]) -> str:
+def _run_shell(s: Settings, args: dict[str, Any], ctx: Any = None) -> str:
     command = args.get("command")
     if not isinstance(command, str) or not command.strip():
         raise ToolError("command must be a non-empty string")
@@ -131,7 +163,7 @@ def _kill_group(proc: subprocess.Popen) -> None:
         pass
 
 
-def _battery_status(s: Settings, args: dict[str, Any]) -> str:
+def _battery_status(s: Settings, args: dict[str, Any], ctx: Any = None) -> str:
     exe = shutil.which("termux-battery-status")
     if not exe:
         raise ToolError("termux-battery-status not found (needs the termux-api package and Termux:API app)")
@@ -149,8 +181,15 @@ def _battery_status(s: Settings, args: dict[str, Any]) -> str:
     return json.dumps({k: data[k] for k in keep if k in data})
 
 
-def _obj(props: dict[str, Any], required: list[str]) -> dict[str, Any]:
+def obj(props: dict[str, Any], required: list[str]) -> dict[str, Any]:
     return {"type": "object", "properties": props, "required": required}
+
+
+# Risky tools take a `purpose` that the owner sees on the approval prompt, labeled as the model's words.
+PURPOSE = {"type": "string", "description": (
+    "One plain sentence for the owner, who reads it on a phone before approving: what this does "
+    "and why, in everyday words, no jargon. Example: 'Check how full storage is, because you asked "
+    "why downloads fail.'")}
 
 
 TOOLS: dict[str, Tool] = {
@@ -159,49 +198,74 @@ TOOLS: dict[str, Tool] = {
         Tool(
             "list_dir",
             "List a directory on the phone. Relative paths start at the agent's working directory.",
-            _obj({"path": {"type": "string", "description": "Directory path; default is the working directory."}}, []),
+            obj({"path": {"type": "string", "description": "Directory path; default is the working directory."}}, []),
             _list_dir,
         ),
         Tool(
             "read_file",
             "Read a text file on the phone (large files are cut off).",
-            _obj({"path": {"type": "string"}}, ["path"]),
+            obj({"path": {"type": "string"}}, ["path"]),
             _read_file,
         ),
         Tool(
             "write_file",
             "Create or overwrite a text file on the phone. Asks the owner first.",
-            _obj({"path": {"type": "string"}, "content": {"type": "string"}}, ["path", "content"]),
+            obj({"path": {"type": "string"}, "content": {"type": "string"}, "purpose": PURPOSE},
+                ["path", "content", "purpose"]),
             _write_file,
             risky=True,
         ),
         Tool(
             "run_shell",
             "Run a shell command in Termux on the phone, with a timeout. Asks the owner first.",
-            _obj({"command": {"type": "string"}}, ["command"]),
+            obj({"command": {"type": "string"}, "purpose": PURPOSE}, ["command", "purpose"]),
             _run_shell,
             risky=True,
         ),
         Tool(
             "battery_status",
             "Read this phone's battery level, charging state and temperature.",
-            _obj({}, []),
+            obj({}, []),
             _battery_status,
         ),
     ]
 }
 
 
-def schemas() -> list[dict[str, Any]]:
-    return [t.schema() for t in TOOLS.values()]
+def register(tool: Tool) -> None:
+    TOOLS[tool.name] = tool
 
 
-def describe_call(name: str, args: dict[str, Any]) -> str:
-    """Short human-readable summary for permission prompts and logs."""
+def available(guest: bool = False) -> list[str]:
+    """Tool names offered to this kind of user; guests never see the skill tools."""
+    return [n for n, t in TOOLS.items() if not (guest and t.group == "skills")]
+
+
+def schemas(names: list[str] | None = None) -> list[dict[str, Any]]:
+    return [TOOLS[n].schema() for n in (names if names is not None else TOOLS)]
+
+
+def describe_call(name: str, args: dict[str, Any]) -> approval.Request:
+    """What a permission prompt shows: a title written here, the model's stated purpose,
+    and the facts (command, path, size). As a string, the old one-line summary."""
+    purpose = args.get("purpose") if isinstance(args.get("purpose"), str) else ""
     if name == "run_shell":
-        return f"run_shell: {args.get('command')!r}"
+        cmd = str(args.get("command"))
+        return approval.Request(f"run_shell: {cmd!r}", title="Run a shell command on the phone",
+                                purpose=purpose, detail=f"Command:\n{cmd}")
     if name == "write_file":
         content = args.get("content")
-        size = len(content) if isinstance(content, str) else "?"
-        return f"write_file: {args.get('path')!r} ({size} chars)"
-    return f"{name}({json.dumps(args)[:200]})"
+        path = str(args.get("path"))
+        if isinstance(content, str):
+            size, lines = len(content), content.count("\n") + 1
+            preview = content[:300] + ("..." if len(content) > 300 else "")
+        else:
+            size, lines, preview = "?", "?", ""
+        try:
+            verb = "Overwrite" if Path(os.path.expanduser(path)).exists() else "Create"
+        except OSError:
+            verb = "Write"
+        return approval.Request(
+            f"write_file: {path!r} ({size} chars)", title=f"{verb} a file on the phone", purpose=purpose,
+            detail=f"File: {path}\nSize: {size} chars, {lines} lines\nStarts with:\n{preview}")
+    return approval.Request(f"{name}({json.dumps(args)[:200]})", title=f"Use {name}", purpose=purpose)

@@ -16,6 +16,11 @@ each piece to its Hermes source. In short:
 - on Telegram, an outage that outlasts the retries is waited out with a countdown
 - one turn at a time per conversation, across processes (a lease in the database)
 Every recovery is bounded, and scaffolding messages (nudges, fragments) are not saved.
+
+Skills (docs/hermes/skills.md): the owner's prompt carries the skill index, frozen per
+conversation so the prompt stays byte-stable; when the library changes mid-conversation,
+the next user message carries a one-time note instead. Guests get no skill tools and no
+index. After enough tool-calling steps, the caller runs the background review (review.py).
 """
 
 from __future__ import annotations
@@ -29,7 +34,7 @@ import time
 from importlib import resources
 from typing import Any, Callable
 
-from . import compaction, guardrails, provider, tools
+from . import approval, compaction, guardrails, provider, skill_tools, skills, tools  # skill_tools registers its tools
 from .config import Settings
 from .repetition import is_repetition_dominated
 from .store import Store, history_chars, recent_window
@@ -90,32 +95,48 @@ CRASH_NOTE = "[this turn was interrupted: Chelys stopped before it finished{tool
 MAY_HAVE_RUN = ". Some actions may already have run; check their effects before resending"
 
 
+def approval_ok(answer: object) -> bool:
+    return approval.decision(answer) != approval.DENY
+
+
 def load_persona(s: Settings) -> str:
     if s.persona_path.exists():
         return s.persona_path.read_text(encoding="utf-8").strip()
     return resources.files("chelys").joinpath("persona_default.md").read_text(encoding="utf-8").strip()
 
 
-def system_prompt(s: Settings) -> str:
-    """Byte-stable for a given config: nothing here may change between turns (no clock),
-    or DeepSeek's prefix cache misses on the whole history."""
-    risky = ", ".join(n for n, t in tools.TOOLS.items() if t.risky)
-    return (
+def system_prompt(s: Settings, guest: bool = False, skills_index: str | None = None) -> str:
+    """Byte-stable for a given config and frozen skill index: nothing here may change
+    between turns (no clock), or DeepSeek's prefix cache misses on the whole history."""
+    names = tools.available(guest)
+    risky = ", ".join(n for n in names if tools.TOOLS[n].risky)
+    prompt = (
         f"{load_persona(s)}\n\n"
         "## Where you are\n"
         f"You run inside Termux on a small Android phone ({platform.machine()}, Python {platform.python_version()}). "
         f"Your tools act on this phone. Working directory: {s.workdir}. "
         "Each user message ends with the local time it was sent.\n"
         f"The owner must approve {risky} before they run; a denial is final for that call, so don't retry it. "
+        "Fill in `purpose` plainly: the owner decides from it on a small screen. "
         f"You get at most {s.max_iterations} model steps per message, and tool output is cut off after "
         f"{s.tool_output_chars} characters. Keep replies short: the owner may be reading on a phone."
     )
+    if guest:
+        prompt += ("\n\nYou are talking with a guest the owner invited, not the owner. Risky tools are off for "
+                   "guests, and you have no skills in this conversation.")
+    elif skills_index is not None:
+        prompt += "\n\n" + skills.prompt_section(skills_index)
+    return prompt
 
 
-def stamp_user_message(text: str, when: float | None = None) -> dict[str, Any]:
-    """The user row: clean text for display, plus the exact bytes sent to the model."""
+LEARN_STEPS = 16  # a /learn turn reads sources and writes several files; Hermes gives it a normal turn's budget
+
+
+def stamp_user_message(text: str, when: float | None = None, api_text: str | None = None) -> dict[str, Any]:
+    """The user row: clean text for display, plus the exact bytes sent to the model
+    (api_text when the model should see more than what was typed, as with /learn)."""
     sent = time.strftime("%Y-%m-%d %H:%M %Z", time.localtime(when))
-    return {"role": "user", "content": text, "api_content": f"{text}\n\n[sent {sent}]"}
+    return {"role": "user", "content": text, "api_content": f"{api_text or text}\n\n[sent {sent}]"}
 
 
 def ladder_wait(cycle: int, retry_after: float | None) -> float:
@@ -202,6 +223,8 @@ class Agent:
         chat_fn: Callable[..., dict[str, Any]] = provider.chat,
         hard_stop: bool = False,
         autorecover: Recover | None = None,
+        guest: bool = False,
+        actor: str = "foreground",
     ):
         self.s = s
         self.api_key = api_key
@@ -212,33 +235,60 @@ class Agent:
         self.chat_fn = chat_fn
         self.hard_stop = hard_stop  # let the loop guard stop a turn (unattended surfaces)
         self.autorecover = autorecover  # wait out outages (unattended surfaces)
-        self.system = system_prompt(s)  # built once per session, never rebuilt mid-session
+        self.guest = guest          # a Telegram guest: no risky tools, no skills, confined file tools
+        self.actor = actor          # "foreground", or "review" for the background skill review
+        self.tool_names = tools.available(guest)
+        # The prompt is rebuilt from the conversation's frozen skill index at each turn start,
+        # which gives the same bytes every turn until compaction refreshes the index.
+        self.system = system_prompt(s, guest, None if guest else "")
         self.tools_ok: list[str] = []       # tools that ran and returned normally, latest turn
         self.tools_started: list[str] = []  # tools whose handler was invoked, latest turn
+        self.viewed: set[tuple[str, str]] = set()  # (skill, file) loaded with skill_view; the review's read-before-write
+        self.staged: list[str] = []         # pending change ids this agent proposed (background review)
+        self.review_due = False             # the caller should run the background review after replying
+        self.step_limit = s.max_iterations
+        self._history: list[dict[str, Any]] = []
+        self._turn: list[dict[str, Any]] = []
         self._turn_no: int | None = None
         self._lease: str | None = None
         self._recoveries = 0
+        self._compacted = False
 
-    def run_turn(self, user_text: str) -> str:
+    @property
+    def reviews(self) -> bool:
+        """Whether this conversation feeds the background skill review: owner only."""
+        return not self.guest and self.actor == "foreground" and self.s.review_interval > 0
+
+    def run_turn(self, user_text: str, api_text: str | None = None, step_limit: int | None = None) -> str:
         """Run one user message to a final reply, saving rows as they happen.
+
+        api_text, if given, is what the model sees instead of user_text (/learn sends its
+        whole prompt while the history shows what was typed). step_limit overrides
+        max_iterations for this turn.
 
         Ctrl-C or a model/API failure closes the turn: calls without results get one saying
         they didn't run, and a note says what happened, so the next turn knows.
         Raises store.SessionBusy if another process is mid-turn in this conversation.
         """
-        user_msg = stamp_user_message(user_text)  # the turn's clock is frozen here
+        user_msg = stamp_user_message(user_text, api_text=api_text)  # the turn's clock is frozen here
         self.tools_ok, self.tools_started = [], []
         self._turn_no, self._recoveries = None, 0
+        self.review_due = False
+        self.step_limit = max(step_limit or 0, self.s.max_iterations)
         holder = f"pid={os.getpid()}:{secrets.token_hex(3)}"
         self.store.acquire_lease(self.session_id, holder)
         self._lease = holder
         turn: list[dict[str, Any]] = []
         try:
             history = self._close_open_turn(self.store.messages(self.session_id))
+            self._compacted = False
             history = self._maybe_compact(history, user_msg)
+            self._prepare_skills(user_msg, refresh=self._compacted)
             self._turn_no = self.store.last_turn(self.session_id) + 1
             self._add(turn, user_msg)
-            return self._loop(history, turn)
+            reply = self._loop(history, turn)
+            self._check_review_due()
+            return reply
         except KeyboardInterrupt:
             self._close_turn(turn, user_msg, "cancelled by the owner (Ctrl-C)")
             raise
@@ -295,6 +345,59 @@ class Agent:
         self.on_event("notice", "closed a turn an earlier run left unfinished")
         return history + fix
 
+    # ---- skills ----
+
+    def _prepare_skills(self, user_msg: dict[str, Any], refresh: bool) -> None:
+        """Freeze this conversation's skill index into the prompt, and note changes since.
+
+        The index is stored on the session row: the Telegram bridge builds a new Agent for
+        every message, so an in-memory snapshot would change the prompt (and lose the prefix
+        cache) whenever the library did. It is refreshed only when compaction has already
+        rewritten the history, as Hermes does."""
+        if self.guest:
+            self.system = system_prompt(self.s, True)
+            return
+        try:
+            current = skills.discover(skills.root(self.s))
+        except OSError:
+            current = []
+        frozen = self.store.session_field(self.session_id, "skills_index")
+        if frozen is None or refresh:
+            frozen = skills.index_text(current)
+            self.store.set_session_field(self.session_id, "skills_index", frozen)
+            self.store.set_session_field(self.session_id, "skills_noted", "")
+        self.system = system_prompt(self.s, False, frozen)
+        note = skills.change_note(frozen, skills.index_map(current))
+        noted = self.store.session_field(self.session_id, "skills_noted") or ""
+        if note == noted:
+            return
+        self.store.set_session_field(self.session_id, "skills_noted", note)
+        if not note:
+            note = "[System: the skill list in your instructions is accurate again; ignore earlier skill-change notes.]"
+        user_msg["api_content"] += "\n\n" + note
+
+    def _check_review_due(self) -> None:
+        if not self.reviews:
+            return
+        steps = int(self.store.session_field(self.session_id, "review_steps") or 0)
+        if steps >= self.s.review_interval:
+            self.store.set_session_field(self.session_id, "review_steps", 0)
+            self.review_due = True
+
+    def _count_review_step(self, calls: list[dict[str, Any]]) -> None:
+        """One tool-calling model step toward the next review; the model saving a skill
+        itself resets the count (Hermes's creation nudge counter)."""
+        if not self.reviews:
+            return
+        try:
+            if any(c["function"]["name"] == "skill_manage" for c in calls):
+                self.store.set_session_field(self.session_id, "review_steps", 0)
+            else:
+                steps = int(self.store.session_field(self.session_id, "review_steps") or 0)
+                self.store.set_session_field(self.session_id, "review_steps", steps + 1)
+        except sqlite3.Error:
+            pass
+
     # ---- compaction ----
 
     def _maybe_compact(self, history: list[dict[str, Any]], user_msg: dict[str, Any]) -> list[dict[str, Any]]:
@@ -323,8 +426,10 @@ class Agent:
         text = (msg.get("content") or "").strip()
         if msg.get("_finish_reason") == "length" or not text:
             return self._compaction_failed(history, "the summary came back empty or cut off")
-        new = compaction.assemble(history, head_end, tail_start, compaction.redact(text))
+        text = compaction.add_pruned_skills(compaction.redact(text), middle, history[tail_start:])
+        new = compaction.assemble(history, head_end, tail_start, text)
         self.store.replace_active(self.session_id, new)
+        self._compacted = True
         self.on_event("notice", f"history summarized: {history_chars(history)} -> {history_chars(new)} chars")
         return new
 
@@ -338,13 +443,14 @@ class Agent:
     # ---- the loop ----
 
     def _loop(self, history: list[dict[str, Any]], turn: list[dict[str, Any]]) -> str:
-        schemas = tools.schemas()
+        schemas = tools.schemas(self.tool_names)
         guard = guardrails.Guard(self.hard_stop)
+        self._history, self._turn = history, turn
         parts: list[str] = []  # text fragments of a reply cut off by max_tokens
         cap: int | None = None  # boosted max_tokens while retrying a cut-off tool call
         trunc_retries = continuations = 0
         empty_nudged = False
-        for _ in range(self.s.max_iterations):
+        for _ in range(self.step_limit):
             msg = self._call(history + turn, schemas, cap)
             finish = msg.pop("_finish_reason", None)
             calls = msg.get("tool_calls") or []
@@ -361,6 +467,7 @@ class Agent:
                 return self._end(turn, TRUNCATED_FINAL)
             if calls:
                 cap, trunc_retries = None, 0
+                self._count_review_step(calls)
                 halt = self._tool_round(msg, turn, guard)
                 if halt is not None:
                     return self._end(turn, HALT_FINAL.format(tool=halt.tool, count=halt.count))
@@ -405,7 +512,7 @@ class Agent:
         """Out of steps: one more call asking for a summary instead of a dead stop.
         Tools stay in the request so the cached prefix still matches; any tool calls the
         model makes anyway are ignored. One retry if the summary comes back empty."""
-        self.on_event("notice", f"hit the limit of {self.s.max_iterations} model steps; asking for a summary")
+        self.on_event("notice", f"hit the limit of {self.step_limit} model steps; asking for a summary")
         self._add(turn, {"role": "user", "content": SUMMARY_REQUEST})
         text = ""
         try:
@@ -415,7 +522,7 @@ class Agent:
                 if text:
                     break
         except provider.ProviderError:
-            return self._end(turn, NO_SUMMARY.format(limit=self.s.max_iterations))
+            return self._end(turn, NO_SUMMARY.format(limit=self.step_limit))
         return self._end(turn, text or EMPTY_SUMMARY)
 
     def _call(self, msgs: list[dict[str, Any]], schemas: list, max_tokens: int | None) -> dict[str, Any]:
@@ -495,6 +602,8 @@ class Agent:
 
     def _run_tool(self, call: dict[str, Any], guard: guardrails.Guard) -> str:
         name = call["function"]["name"]
+        if name in tools.TOOLS and name not in self.tool_names:
+            return f"error: no tool named {name!r}. Available tools: {', '.join(self.tool_names)}"
         args, err = _parse_args(name, call["function"].get("arguments") or "")
         if args is None:
             return err
@@ -506,7 +615,11 @@ class Agent:
         halt_before = guard.halt
         decision = guard.after_call(name, args, out, failed)
         notice, stub = guard.observe_call(name, args, out, call["id"], failed)
-        content = stub or _clip(out, self.s.tool_output_chars)
+        if name == "skill_view" and not failed and self.actor != "review" and self._already_shown(out):
+            # Hermes's repeat-view dedup. Never in the review, which must load fresh copies.
+            stub = (f"[skill_view: unchanged since it was loaded earlier in this conversation; use that "
+                    f"copy, it is still in your context]")
+        content = stub or _clip(out, tools.TOOLS[name].max_output or self.s.tool_output_chars)
         if decision.action in ("warn", "halt"):
             content += decision.guidance()
             self.on_event("guard", decision.message)
@@ -518,19 +631,25 @@ class Agent:
             content += "\n\n" + notice
         return content
 
+    def _already_shown(self, out: str) -> bool:
+        """True if this exact tool result is already in what the model sees."""
+        window = recent_window(self._history + self._turn, self.s.history_chars)
+        return any(m.get("role") == "tool" and m.get("content") == out for m in window)
+
     def _execute(self, name: str, args: dict[str, Any]) -> tuple[str, bool]:
         """Run one tool. Returns (output, failed)."""
         tool = tools.TOOLS[name]
         summary = tools.describe_call(name, args)
-        if tool.risky and not self.approve(summary):
+        if tool.risky and not approval_ok(self.approve(summary)):
             self.on_event("denied", summary)
             return "denied: the owner did not approve this action", True
         self.on_event("tool", summary)
         self.tools_started.append(name)
         try:
-            out = tool.handler(self.s, args)
-            failed = name == "run_shell" and not out.startswith("exit code 0")
-            self.tools_ok.append(name)
+            out = tool.handler(self.s, args, self)
+            failed = (name == "run_shell" and not out.startswith("exit code 0")) or out.startswith("denied:")
+            if not out.startswith("denied:"):
+                self.tools_ok.append(name)
         except (tools.ToolError, OSError) as e:
             out, failed = f"error: {e}", True
         self.on_event("result", out.splitlines()[0][:120] if out else "(empty)")

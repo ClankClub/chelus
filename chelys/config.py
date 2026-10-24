@@ -42,6 +42,16 @@ class Settings:
     read_file_bytes: int = 65536
     # How much past conversation is sent to the model, in characters (~4 chars per token).
     history_chars: int = 40000
+    # Skills. "ask": every skill write needs the owner's OK (once, this conversation, or always
+    # for that skill), and background-review changes wait as pending. "off": writes apply
+    # directly, as in Hermes's default.
+    skill_approval: str = "ask"
+    # Run the background skill review after this many tool-calling model steps (Hermes: 10).
+    # 0 turns it off.
+    review_interval: int = 10
+    # Weekly cleanup of skills the background review created: stale after 14 idle days,
+    # archived after 30 (Hermes's curator, without its LLM pass).
+    curator: bool = True
     # Where file tools start and shell commands run.
     workdir: str = field(default_factory=lambda: str(Path.home()))
     config_dir: Path = field(default_factory=_config_dir)
@@ -77,6 +87,8 @@ def load_settings() -> Settings:
             if not ok:
                 raise ConfigError(f"setting {key!r} in {path} should be {type(current).__name__}")
             setattr(s, key, type(current)(value))
+    if s.skill_approval not in ("ask", "off"):
+        raise ConfigError(f"skill_approval in {path} must be \"ask\" or \"off\"")
     return s
 
 

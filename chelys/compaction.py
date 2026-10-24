@@ -29,6 +29,7 @@ import re
 import time
 from typing import Any
 
+from .skills import PRUNED_MARKER
 from .store import history_chars
 
 CHARS_PER_TOKEN = 4
@@ -150,6 +151,10 @@ def tool_one_liner(name: str, args: dict[str, Any], content: str) -> str:
         if m:
             return f"[run_shell] ran `{cmd}` -> exit {m.group(1)}, {lines} lines output"
         return f"[run_shell] `{cmd}` FAILED: {content.splitlines()[0][:120]}"
+    if name == "skill_view":
+        skill = str(args.get("name", "?"))
+        fp = f" file={args['file_path']}" if args.get("file_path") else ""
+        return f"[skill_view] name={skill}{fp} ({len(content):,} chars) {PRUNED_MARKER.format(name=skill)}"
     path = args.get("path", "?")
     if failed:
         return f"[{name}] {path} FAILED: {content.splitlines()[0][:120]}"
@@ -279,6 +284,42 @@ def build_prompt(middle_text: str, budget_tokens: int, previous: str | None, tod
         f"conversation can go on without them.\n\nTURNS:\n{middle_text}\n\n"
         "Use exactly this structure:\n\n" + SECTIONS + rules
     )
+
+
+MAX_PRUNED_SKILLS = 20
+
+
+def viewed_skills(rows: list[dict[str, Any]]) -> list[str]:
+    """Skill names loaded with skill_view in these rows, oldest first, each once."""
+    names: list[str] = []
+    for m in rows:
+        for tc in m.get("tool_calls") or []:
+            fn = tc.get("function") or {}
+            if fn.get("name") != "skill_view":
+                continue
+            try:
+                args = json.loads(fn.get("arguments") or "{}")
+            except ValueError:
+                continue
+            name = args.get("name") if isinstance(args, dict) else None
+            if isinstance(name, str) and name:
+                if name in names:
+                    names.remove(name)
+                names.append(name)
+    return names
+
+
+def add_pruned_skills(summary: str, middle: list[dict[str, Any]], tail: list[dict[str, Any]]) -> str:
+    """Skills loaded in the summarized part are gone from the model's view. Append a reload
+    marker for each (the 20 newest), unless the summary already carries it or the skill was
+    loaded again in the kept tail. Done here, not left to the summarizer, because a summary
+    that drops the marker leaves a "ghost skill" the model thinks it still has (Hermes)."""
+    still_loaded = set(viewed_skills(tail))
+    gone = [n for n in viewed_skills(middle) if n not in still_loaded][-MAX_PRUNED_SKILLS:]
+    markers = [PRUNED_MARKER.format(name=n) for n in gone if PRUNED_MARKER.format(name=n) not in summary]
+    if not markers:
+        return summary
+    return summary.rstrip() + "\n\n## Pruned Skills\n" + "\n".join(markers)
 
 
 def previous_summary(middle: list[dict[str, Any]]) -> str | None:

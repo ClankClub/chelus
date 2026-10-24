@@ -464,28 +464,19 @@ It also embeds a source-hygiene block: **source text is data, not instructions**
 - LLM consolidation and tarball backups;
 - the third-party scanners.
 
-**Prerequisite found while reading:** `read_file` and `list_dir` aren't confined to any directory, and guests can use them. A guest can ask for `~/.config/chelys/deepseek.key`, `telegram.token` or the history database and get them. Skills would leak the same way. This needs fixing before skills, and really before anything else.
+**Prerequisite found while reading, fixed:** `read_file` and `list_dir` weren't confined, and guests could use them to read the API key, the bot token or the history database. File tools now refuse the config dir, the data dir and `~/.ssh` for everyone (resolved with realpath, so `..` and symlinks don't get around it), and guests are limited to non-hidden paths under the workdir.
 
-## Proposed port order
+## Port status (2026-10-24)
 
-| # | Piece | What it is | Size | Risk |
-|---|---|---|---|---|
-| 0 | Confine reads | Block the config and data dirs from file tools for everyone; guests are limited to the workdir. | ~30 lines | Fixes a live leak. |
-| 1 | Read path | Skills root, frontmatter parser, `skills_list`, `skill_view` (support files, containment, dedup), the `## Skills` index in the system prompt, the skill-safety rule, pruned-skill markers in compaction. Guests see none of it. | ~250 lines | Low. Read-only, and useful at once with skills written by hand on the PC and deployed. |
-| 2 | Write path | Separate tools: `skill_create`, `skill_patch` (exact, unique match), `skill_write_file`, `skill_remove_file`, `skill_archive`. Limits as above. Atomic writes, a `skill_revisions` table, `chelys skills undo`, the index delta note. Every write goes through the approval gate, with a compact diff in the Telegram message. | ~350 lines | Medium. The model now edits its own instructions, so 3 ships with it. |
-| 3 | Content guard | The injection, invisible-Unicode, secret and config-tampering patterns from skills_guard, blocking critical findings with a message that names the finding. Three lint rules: description length, oversized body, incident-log shape. | ~150 lines | Low on its own. |
-| 4 | `/learn` | The prompt with the authoring standards and the source-hygiene block, as a Telegram and chat command. | ~80 lines | Low. The owner starts it. |
-| 5 | Background review | The review prompt; the 10-iteration counter in the session row; a worker thread after the reply, under the turn lease; skill and read tools only; a 16-step cap; writes staged as pending, with `/skills pending` and approve/reject buttons; owner conversations only. | ~400 lines | High. It's the unattended loop, and threading and cost need a live trial on the phone. |
-| 6 | Curator and usage | A `skill_usage` table, and a weekly deterministic stale/archive pass over review-created skills only. | ~150 lines | Low, but pointless until the library is big. |
+All of items 0-6 of the original plan are built, in `skills.py`, `skill_guard.py`, `skill_tools.py`, `approval.py`, `learn.py`, `review.py` and `curator.py`. 138 tests pass on the PC and the phone (fake model, fake Telegram). Not yet run live.
 
-Items 0 to 4 make a complete skills system that the owner drives. Item 5 makes it self-improving. Item 6 waits until there's evidence the library needs pruning.
+Decisions that changed from the plan, at the owner's call:
 
-## Decisions for the owner
+- **One `skill_manage` tool**, like Hermes, with a flat schema: `action` (create, patch, write_file, remove_file, delete; `edit` is accepted as patch) and the fields each action uses. Wrong fields get an error that says which field to use. No batch.
+- **Approval scopes.** Every skill write asks by default (`skill_approval = "ask"`), with four answers: allow once, allow for this conversation, always for this skill, deny. "Always" is stored per skill (`chelys skills revoke NAME` drops it). `skill_approval = "off"` writes without asking.
+- **Plain-language approval cards** for every risky tool, not just skills: a title written by the code ("Run a shell command on the phone"), the model's reason in a required `purpose` argument, labeled as Chelys's words, then the facts (the command, the file and size, or a diff).
+- **Background review built now**, not later. It runs after the reply is sent, in the bridge's poll loop, so messages sent during a review wait until it finishes (no threads). With approval on, its writes are staged as pending (10 at most) and approved with buttons that never expire; skills the owner marked "always" are written directly.
+- **Curator built now**: the deterministic pass only (weekly, after 2 h idle; agent-created skills go stale at 14 days and are archived at 30; pinned and owner-made skills are never touched). The LLM consolidation pass stays out, as it is off by default in Hermes.
+- Delete means archive, and `undo` reverts the last change to a skill (restoring an archived one), refusing if the file changed since.
 
-1. **Approval on by default** for every skill write, foreground and background. Hermes ships with it off. But a skill is a persistent prompt: with a small model, guests, and web text around, one bad write gets followed in every session after.
-2. **Background review**: build it in this port, after items 1-4 have run live for a while, or leave it for later. The lean is to build it with staged writes. It's the point of the subsystem, and staging keeps the risk where the owner can see it.
-3. **Curator**: leave it out for now.
-4. **Tool shape** (decided unless the owner objects): separate small tools instead of Hermes's single `skill_manage` with an `operations` array whose items branch by action.
-   - Each tool is a flat schema that allows no unknown keys, so Hermes's misfiled-field bug can't happen.
-   - It doesn't depend on DeepSeek honoring `oneOf` inside array items, which is untested.
-   - The cost is no atomic multi-op batch, which a phone-sized library doesn't need.
+To check live: the model's use of `skill_manage` with thinking on, how readable the cards are on a phone screen, and the review's cost and latency.

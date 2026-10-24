@@ -146,9 +146,10 @@ class BridgeTests(unittest.TestCase):
             {"role": "assistant", "content": "done"},
         ])
         self.assertEqual(target.read_text(encoding="utf-8"), "hey")
-        self.assertTrue(any(t.startswith("Allow this?") for t in bot.texts()))
+        self.assertTrue(any(t.startswith("Allow this?\nCreate a file on the phone") for t in bot.texts()))
         self.assertIn(("editMessageText", {"chat_id": OWNER, "message_id": 5,
-                                           "text": f"Approved: write_file: {str(target)!r} (3 chars)"}), bot.sent)
+                                           "text": f"Allowed once: Create a file on the phone\nFile: {target}"}),
+                      bot.sent)
 
     def test_approval_no_and_stranger_button_and_stale_nonce(self):
         target = self.tmp / "nope.txt"

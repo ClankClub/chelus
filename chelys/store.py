@@ -42,13 +42,65 @@ CREATE TABLE IF NOT EXISTS usage (
     cache_hit INTEGER NOT NULL DEFAULT 0,
     cache_miss INTEGER NOT NULL DEFAULT 0
 );
+-- Skills (see skill_tools.py). Every skill change is a revision, so any change can be undone.
+CREATE TABLE IF NOT EXISTS skill_revisions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts REAL NOT NULL,
+    skill TEXT NOT NULL,
+    file TEXT NOT NULL,          -- path inside the skill, or '' for the whole skill (archive)
+    actor TEXT NOT NULL,         -- foreground, review, learn, owner, curator
+    action TEXT NOT NULL,
+    before TEXT,                 -- NULL: the file didn't exist
+    after TEXT,                  -- NULL: the file was removed; for archive, where it went
+    undone INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS skill_revisions_skill ON skill_revisions(skill, id);
+-- Changes the background review proposed, waiting for the owner.
+CREATE TABLE IF NOT EXISTS skill_pending (
+    id TEXT PRIMARY KEY,
+    ts REAL NOT NULL,
+    session_id INTEGER,
+    origin TEXT NOT NULL,
+    skill TEXT NOT NULL,
+    gist TEXT NOT NULL,
+    payload TEXT NOT NULL
+);
+-- Standing approvals: skill '*' with a session id is "this conversation"; a skill name with
+-- session 0 is "always for this skill".
+CREATE TABLE IF NOT EXISTS skill_grants (
+    skill TEXT NOT NULL,
+    session_id INTEGER NOT NULL,
+    PRIMARY KEY (skill, session_id)
+);
+CREATE TABLE IF NOT EXISTS skill_usage (
+    name TEXT PRIMARY KEY,
+    created_by TEXT,             -- agent (background review), learn (foreground), NULL: hand-made
+    created REAL,
+    use_count INTEGER NOT NULL DEFAULT 0,
+    view_count INTEGER NOT NULL DEFAULT 0,
+    patch_count INTEGER NOT NULL DEFAULT 0,
+    last_used REAL,
+    last_viewed REAL,
+    last_patched REAL,
+    state TEXT NOT NULL DEFAULT 'active',
+    pinned INTEGER NOT NULL DEFAULT 0,
+    archived_at REAL
+);
+CREATE TABLE IF NOT EXISTS meta (
+    key TEXT PRIMARY KEY,
+    value TEXT
+);
 """
 
 # Columns added after v0.1.0; existing databases get them on open.
 MIGRATIONS = {
     "messages": [("active", "INTEGER NOT NULL DEFAULT 1")],
     "sessions": [("lease_holder", "TEXT"), ("lease_expires", "REAL NOT NULL DEFAULT 0"),
-                 ("compact_retry_at", "REAL NOT NULL DEFAULT 0")],
+                 ("compact_retry_at", "REAL NOT NULL DEFAULT 0"),
+                 # skills: the index frozen into this conversation's prompt, the last change
+                 # note sent, and model steps since the last skill review
+                 ("skills_index", "TEXT"), ("skills_noted", "TEXT NOT NULL DEFAULT ''"),
+                 ("review_steps", "INTEGER NOT NULL DEFAULT 0")],
 }
 
 USAGE_FIELDS = ("calls", "prompt", "completion", "cache_hit", "cache_miss")
@@ -235,6 +287,140 @@ class Store:
         else:
             row = self.db.execute(sql + " WHERE session_id = ?", (session_id,)).fetchone()
         return {k: int(v or 0) for k, v in zip(USAGE_FIELDS, row)}
+
+
+    # ---- per-conversation skill state ----
+
+    def session_field(self, session_id: int, column: str) -> Any:
+        assert column in ("skills_index", "skills_noted", "review_steps")
+        row = self.db.execute(f"SELECT {column} FROM sessions WHERE id = ?", (session_id,)).fetchone()
+        return row[0] if row else None
+
+    def set_session_field(self, session_id: int, column: str, value: Any) -> None:
+        assert column in ("skills_index", "skills_noted", "review_steps")
+        with self.db:
+            self.db.execute(f"UPDATE sessions SET {column} = ? WHERE id = ?", (value, session_id))
+
+    # ---- skill revisions ----
+
+    def add_revision(self, skill: str, file: str, actor: str, action: str,
+                     before: str | None, after: str | None) -> int:
+        with self.db:
+            cur = self.db.execute(
+                "INSERT INTO skill_revisions (ts, skill, file, actor, action, before, after) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (time.time(), skill, file, actor, action, before, after))
+        return int(cur.lastrowid)
+
+    def last_revision(self, skill: str) -> dict[str, Any] | None:
+        row = self.db.execute(
+            "SELECT id, ts, skill, file, actor, action, before, after FROM skill_revisions "
+            "WHERE skill = ? AND undone = 0 ORDER BY id DESC LIMIT 1", (skill,)).fetchone()
+        if row is None:
+            return None
+        return dict(zip(("id", "ts", "skill", "file", "actor", "action", "before", "after"), row))
+
+    def mark_undone(self, rev_id: int) -> None:
+        with self.db:
+            self.db.execute("UPDATE skill_revisions SET undone = 1 WHERE id = ?", (rev_id,))
+
+    def revisions(self, skill: str | None = None, limit: int = 20) -> list[tuple]:
+        sql = "SELECT id, ts, skill, file, actor, action, undone FROM skill_revisions"
+        args: tuple = ()
+        if skill:
+            sql += " WHERE skill = ?"
+            args = (skill,)
+        return self.db.execute(sql + " ORDER BY id DESC LIMIT ?", args + (limit,)).fetchall()
+
+    # ---- pending skill changes ----
+
+    def add_pending(self, pid: str, session_id: int | None, origin: str, skill: str, gist: str,
+                    payload: dict[str, Any]) -> None:
+        with self.db:
+            self.db.execute("INSERT INTO skill_pending (id, ts, session_id, origin, skill, gist, payload) "
+                            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                            (pid, time.time(), session_id, origin, skill, gist, json.dumps(payload)))
+
+    def pending(self) -> list[dict[str, Any]]:
+        rows = self.db.execute("SELECT id, ts, session_id, origin, skill, gist, payload FROM skill_pending ORDER BY ts")
+        return [dict(zip(("id", "ts", "session_id", "origin", "skill", "gist"), r[:6]), payload=json.loads(r[6]))
+                for r in rows]
+
+    def get_pending(self, pid: str) -> dict[str, Any] | None:
+        return next((p for p in self.pending() if p["id"] == pid), None)
+
+    def drop_pending(self, pid: str) -> bool:
+        with self.db:
+            cur = self.db.execute("DELETE FROM skill_pending WHERE id = ?", (pid,))
+        return cur.rowcount == 1
+
+    # ---- standing skill approvals ----
+
+    def grant(self, skill: str, session_id: int) -> None:
+        with self.db:
+            self.db.execute("INSERT OR IGNORE INTO skill_grants (skill, session_id) VALUES (?, ?)", (skill, session_id))
+
+    def granted(self, skill: str, session_id: int | None) -> bool:
+        """True if writes to this skill are pre-approved: always for this skill, or anything
+        in this conversation."""
+        row = self.db.execute(
+            "SELECT 1 FROM skill_grants WHERE (skill = ? AND session_id = 0) OR (skill = '*' AND session_id = ?)",
+            (skill, session_id if session_id is not None else -1)).fetchone()
+        return row is not None
+
+    def always_grants(self) -> list[str]:
+        return [r[0] for r in self.db.execute("SELECT skill FROM skill_grants WHERE session_id = 0 ORDER BY skill")]
+
+    def revoke(self, skill: str) -> bool:
+        with self.db:
+            cur = self.db.execute("DELETE FROM skill_grants WHERE skill = ? AND session_id = 0", (skill,))
+        return cur.rowcount > 0
+
+    # ---- skill usage (for the curator) ----
+
+    def usage_bump(self, name: str, *, view: bool = False, use: bool = False, patch: bool = False,
+                   created_by: str | None = None) -> None:
+        now = time.time()
+        with self.db:
+            self.db.execute("INSERT OR IGNORE INTO skill_usage (name, created_by, created) VALUES (?, ?, ?)",
+                            (name, created_by, now if created_by else None))
+            if created_by:
+                self.db.execute("UPDATE skill_usage SET created_by = ?, created = ?, state = 'active', "
+                                "archived_at = NULL WHERE name = ?", (created_by, now, name))
+            sets = []
+            if view:
+                sets += ["view_count = view_count + 1", "last_viewed = :now"]
+            if use:
+                sets += ["use_count = use_count + 1", "last_used = :now"]
+            if patch:
+                sets += ["patch_count = patch_count + 1", "last_patched = :now"]
+            if view or use or patch:
+                sets.append("state = CASE WHEN state = 'stale' THEN 'active' ELSE state END")
+                self.db.execute(f"UPDATE skill_usage SET {', '.join(sets)} WHERE name = :name",
+                                {"now": now, "name": name})
+
+    def usage_rows(self) -> list[dict[str, Any]]:
+        cols = ("name", "created_by", "created", "use_count", "view_count", "patch_count", "last_used",
+                "last_viewed", "last_patched", "state", "pinned", "archived_at")
+        return [dict(zip(cols, r)) for r in self.db.execute(f"SELECT {', '.join(cols)} FROM skill_usage ORDER BY name")]
+
+    def set_usage(self, name: str, **fields: Any) -> None:
+        allowed = {"state", "pinned", "archived_at"}
+        assert set(fields) <= allowed
+        with self.db:
+            self.db.execute("INSERT OR IGNORE INTO skill_usage (name) VALUES (?)", (name,))
+            for k, v in fields.items():
+                self.db.execute(f"UPDATE skill_usage SET {k} = ? WHERE name = ?", (v, name))
+
+    # ---- small key/value state ----
+
+    def meta(self, key: str) -> str | None:
+        row = self.db.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
+        return row[0] if row else None
+
+    def set_meta(self, key: str, value: str) -> None:
+        with self.db:
+            self.db.execute("INSERT INTO meta (key, value) VALUES (?, ?) "
+                            "ON CONFLICT(key) DO UPDATE SET value = excluded.value", (key, value))
 
 
 def _storable(m: dict[str, Any]) -> dict[str, Any]:

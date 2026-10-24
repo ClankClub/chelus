@@ -28,13 +28,20 @@ Port one subsystem at a time (memory, then skills, and so on), not all of Hermes
 | `chelys/repetition.py` | detects repetition-dominated replies |
 | `chelys/compaction.py` | summarizes older history (rebuilt from Hermes's context_compressor) |
 | `chelys/provider.py` | DeepSeek HTTP client, retry/backoff, message shaping |
-| `chelys/tools.py` | tool schemas and handlers |
+| `chelys/tools.py` | tool registry, schemas and handlers, file-path confinement, approval card text |
+| `chelys/approval.py` | approval requests (title, the model's purpose, facts) and the once/session/always/deny choices |
+| `chelys/skills.py` | skill library: discovery, frontmatter, index, view, archive |
+| `chelys/skill_tools.py` | `skills_list`, `skill_view`, `skill_manage`: plan, scan, approve or stage, apply, undo |
+| `chelys/skill_guard.py` | content scanner and lint for skill writes |
+| `chelys/learn.py` | the `/learn` prompt |
+| `chelys/review.py` | background skill review after the reply |
+| `chelys/curator.py` | weekly stale/archive pass over review-made skills |
 | `chelys/store.py` | SQLite history saved as it happens, soft-archive, turn lease, history window, usage log |
 | `chelys/config.py` | settings, `config.toml`, key loading |
-| `chelys/cli.py` | `chat`, `ask`, `sessions`, `show`, `usage`, `telegram` |
-| `chelys/telegram.py` | Telegram long-polling bridge, owner-only, approval buttons, outage countdown with `/stop` (imported only by `chelys telegram`) |
+| `chelys/cli.py` | `chat`, `ask`, `sessions`, `show`, `usage`, `skills`, `telegram` |
+| `chelys/telegram.py` | Telegram long-polling bridge, owner-only, approval buttons, pending-skill cards, skill commands, outage countdown with `/stop` (imported only by `chelys telegram`) |
 | `scripts/deploy.sh` | copy to the phone over SSH and run the tests there |
-| `docs/hermes/` | reading notes on Hermes; port lists in [brain_summary.md](docs/hermes/brain_summary.md) (turn loop, done) and [skills.md](docs/hermes/skills.md) (skills, not started) |
+| `docs/hermes/` | reading notes on Hermes; port lists in [brain_summary.md](docs/hermes/brain_summary.md) (turn loop, done) and [skills.md](docs/hermes/skills.md) (skills, built) |
 
 Phone access from the dev PC: `ssh galaxy-a10e`.
 
@@ -56,3 +63,5 @@ Not established yet: running unattended or overnight, surviving a reboot, and ho
 Telegram bridge: 39 tests pass on the PC and on the phone (fake Telegram API), including guests (`telegram_guests`: own conversation, risky tools always refused). It ran live on the phone on 2026-10-24 and the owner had a real chat through it. The approval buttons have not yet been pressed in a live test. Hermes's Telegram adapter (7,381 lines on python-telegram-bot, httpx and asyncio) was not portable, so its behavior was rebuilt with the standard library.
 
 Ported from Hermes since v0.1.0: all 13 items in [brain_summary.md](docs/hermes/brain_summary.md). Items 1-8 (retries, cache-stable prompt, usage log, truncation, tool-call fixes, grace call, loop guard, `[used ...]` tag) were verified live on the phone on 2026-10-24: 62% cache hits on a short chat and a correct tool tag. Items 9-13 (persist as you go, request deadline, auto-recovery, compaction, turn lease) pass 101 tests on the PC but have not run live yet. Old databases are migrated in place on open.
+
+Skills (all of [skills.md](docs/hermes/skills.md)): built on 2026-10-24, with file-tool confinement (config, data and `~/.ssh` refused for everyone; guests limited to the workdir). 138 tests pass on the PC and the phone. Not yet run live: the bridge on the phone was still running older code when this was written.

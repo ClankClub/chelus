@@ -6,14 +6,17 @@ import argparse
 import sys
 import time
 
-from . import __version__, provider
-from .agent import Agent
+from . import __version__, approval, curator, learn, provider, review, skill_tools, skills
+from .agent import LEARN_STEPS, Agent
 from .config import ConfigError, Settings, load_api_key, load_settings
 from .store import SessionBusy, Store
 
 EXIT_OK, EXIT_PROVIDER, EXIT_CONFIG, EXIT_INTERRUPT = 0, 1, 2, 130
 
-CHAT_HELP = "Commands: /new starts a fresh conversation, /quit exits. Ctrl-C cancels the current reply."
+CHAT_HELP = ("Commands: /new starts a fresh conversation, /learn [what] turns something into a skill, "
+             "/quit exits. Ctrl-C cancels the current reply. Skills: chelys skills --help")
+CHOICE_KEYS = {"o": approval.ONCE, "y": approval.ONCE, "yes": approval.ONCE, "s": approval.SESSION,
+               "a": approval.ALWAYS}
 
 
 def _event(kind: str, text: str) -> None:
@@ -22,12 +25,18 @@ def _event(kind: str, text: str) -> None:
     print(f"{label}{text}", file=sys.stderr, flush=True)
 
 
-def _ask_permission(summary: str) -> bool:
+def _ask_permission(req: str) -> str:
+    if not isinstance(req, approval.Request):
+        req = approval.Request(req)
+    print("\n  " + req.card().replace("\n", "\n  "))
+    menu = {approval.ONCE: "[o]nce", approval.SESSION: "[s]ession", approval.ALWAYS: "[a]lways for this skill",
+            approval.DENY: "[N]o"}
     try:
-        answer = input(f"  ? allow {summary} [y/N] ")
+        answer = input("  ? " + "  ".join(menu[c] for c in req.choices) + " ").strip().lower()
     except EOFError:
-        return False
-    return answer.strip().lower() in ("y", "yes")
+        return approval.DENY
+    choice = CHOICE_KEYS.get(answer, approval.DENY)
+    return choice if choice in req.choices else approval.DENY
 
 
 def _wait_out(seconds: float, cycle: int, total: int, error: str) -> bool:
@@ -75,8 +84,11 @@ def cmd_chat(s: Settings, args: argparse.Namespace) -> int:
             if line == "/help":
                 print(CHAT_HELP)
                 continue
+            api_text, steps = None, None
+            if line == "/learn" or line.startswith("/learn "):
+                api_text, steps = learn.build_prompt(line[len("/learn"):]), LEARN_STEPS
             try:
-                reply = agent.run_turn(line)
+                reply = agent.run_turn(line, api_text=api_text, step_limit=steps)
             except KeyboardInterrupt:
                 print("\n[cancelled]")
                 continue
@@ -84,6 +96,14 @@ def cmd_chat(s: Settings, args: argparse.Namespace) -> int:
                 print(f"[error] {e}")
                 continue
             print(f"bot> {reply}")
+            if agent.review_due:
+                try:
+                    result = review.run(agent)
+                except KeyboardInterrupt:
+                    print("\n[skill review cancelled]")
+                    continue
+                if result.staged:
+                    print(f"  ~ {len(result.staged)} skill change(s) wait for you: chelys skills pending")
     finally:
         store.close()
 
@@ -162,6 +182,59 @@ def cmd_usage(s: Settings, args: argparse.Namespace) -> int:
         store.close()
 
 
+def cmd_skills(s: Settings, args: argparse.Namespace) -> int:
+    store = Store(s.db_path)
+    base = skills.root(s)
+    try:
+        act, name = args.action, args.name
+        if act in ("view", "approve", "reject", "undo", "pin", "unpin", "revoke") and not name:
+            print(f"usage: chelys skills {act} NAME", file=sys.stderr)
+            return EXIT_CONFIG
+        if act == "list":
+            found = skills.discover(base)
+            usage = {r["name"]: r for r in store.usage_rows()}
+            for k in found:
+                u = usage.get(k.name) or {}
+                tags = [t for t in (u.get("created_by"), u.get("state") if u.get("state") != "active" else None,
+                                    "pinned" if u.get("pinned") else None) if t]
+                print(f"{k.category or 'general'}/{k.name}: {k.description}" + (f"  [{', '.join(tags)}]" if tags else ""))
+            if not found:
+                print(f"no skills yet (they live in {base})")
+            for p in skills.archived(base):
+                print(f"archived: {p.name}")
+        elif act == "view":
+            print(skills.view(base, name))
+        elif act == "pending":
+            recs = store.pending()
+            if not recs:
+                print("no skill changes are waiting")
+            for rec in recs:
+                print(skill_tools.pending_card(rec, s) + "\n")
+        elif act == "approve":
+            print(skill_tools.apply_pending(s, store, name))
+        elif act == "reject":
+            print(skill_tools.reject_pending(store, name))
+        elif act == "undo":
+            print(skill_tools.undo(s, store, name))
+        elif act in ("pin", "unpin"):
+            store.set_usage(name, pinned=1 if act == "pin" else 0)
+            print(f"{name}: {'pinned (the curator leaves it alone)' if act == 'pin' else 'unpinned'}")
+        elif act == "revoke":
+            print(f"{name}: no longer always allowed" if store.revoke(name) else f"{name} had no standing approval")
+        elif act == "history":
+            for rid, ts, skill, file, actor, action, undone in store.revisions(name):
+                when = time.strftime("%Y-%m-%d %H:%M", time.localtime(ts))
+                print(f"{when}  {skill:<20} {action:<11} {file or '-':<24} by {actor}{'  (undone)' if undone else ''}")
+        elif act == "curate":
+            print(curator.run(s, store))
+        return EXIT_OK
+    except skills.SkillError as e:
+        print(f"[skills] {e}", file=sys.stderr)
+        return EXIT_CONFIG
+    finally:
+        store.close()
+
+
 def cmd_telegram(s: Settings, args: argparse.Namespace) -> int:
     from . import telegram  # optional feature: only imported when used
     return telegram.run(s)
@@ -189,6 +262,13 @@ def build_parser() -> argparse.ArgumentParser:
     sh.add_argument("session", type=int, nargs="?")
     u = sub.add_parser("usage", help="token usage and cache hits (default: latest conversation)")
     u.add_argument("session", type=int, nargs="?")
+    sk = sub.add_parser("skills", help="list, review, undo and manage skills")
+    sk.add_argument("action", nargs="?", default="list",
+                    choices=["list", "view", "pending", "approve", "reject", "undo", "history", "pin", "unpin",
+                             "revoke", "curate"],
+                    help="list (default); view NAME; pending; approve ID; reject ID; undo NAME (the last change); "
+                         "history [NAME]; pin/unpin NAME (curator); revoke NAME (drop 'always'); curate (run now)")
+    sk.add_argument("name", nargs="?")
     return p
 
 
@@ -197,7 +277,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command is None:
         args = build_parser().parse_args(["chat", *(argv if argv is not None else sys.argv[1:])])
     handlers = {"chat": cmd_chat, "ask": cmd_ask, "sessions": cmd_sessions, "show": cmd_show,
-                "telegram": cmd_telegram, "usage": cmd_usage}
+                "telegram": cmd_telegram, "usage": cmd_usage, "skills": cmd_skills}
     try:
         s = load_settings()
         return handlers[args.command](s, args)

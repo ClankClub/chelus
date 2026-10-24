@@ -43,10 +43,11 @@ chelys ask "how's the battery?"   # one message, then exit
 chelys sessions             # list conversations
 chelys show [N]             # print a conversation
 chelys usage                # token and cache-hit totals per conversation
+chelys skills [ACTION]      # list, view, pending, approve, reject, undo, history, pin, revoke, curate
 chelys telegram             # run the Telegram bot bridge (see below)
 ```
 
-In chat: `/new`, `/quit` and `/help`. Ctrl-C cancels the current reply; at the prompt it exits. If DeepSeek is still down after the normal retries, chat waits and tries again a few times with a countdown; Ctrl-C stops that too.
+In chat: `/new`, `/learn [what]`, `/quit` and `/help`. Ctrl-C cancels the current reply; at the prompt it exits. If DeepSeek is still down after the normal retries, chat waits and tries again a few times with a countdown; Ctrl-C stops that too.
 
 | Exit code | Meaning |
 |---|---|
@@ -76,7 +77,9 @@ Chat with Chelys from Telegram. The phone polls Telegram over HTTPS, so it needs
 
 The bot answers only your user ID in a private chat and drops everything else unread.
 
-**Guests.** To let someone else chat with it, put their numeric user ID in `~/.config/chelys/telegram_guests`, one per line (`#` comments are fine), then restart the bridge. Guests get their own conversation and the safe tools. Risky tools are always refused for guests, and no approval buttons are shown. Remove the line and restart to revoke access. Guests use your DeepSeek key. Risky tools ask for approval with Yes/No buttons. An unanswered request counts as No after 3 minutes. Replies list the tools used. `/new` starts a fresh conversation and `/help` shows the commands. If DeepSeek stays down after the normal retries, the bot posts a countdown and tries again up to 5 times, 15 to 60 seconds apart; `/stop` cancels the wait. The Telegram conversation is separate from terminal chat and survives restarts.
+**Guests.** To let someone else chat with it, put their numeric user ID in `~/.config/chelys/telegram_guests`, one per line (`#` comments are fine), then restart the bridge. Guests get their own conversation and the safe tools. Risky tools are always refused for guests, and no approval buttons are shown. Remove the line and restart to revoke access. Guests use your DeepSeek key, and get no skills and no skill commands.
+
+Risky tools ask for approval with a card in plain language: what the action is, Chelys's reason in her own words, and the facts (the command, or the file and its size). An unanswered request counts as Deny after 3 minutes. Replies list the tools used. `/new` starts a fresh conversation and `/help` shows the commands. The skill commands are `/learn [what]`, `/skills`, `/pending` and `/undo NAME` (see Skills below). If DeepSeek stays down after the normal retries, the bot posts a countdown and tries again up to 5 times, 15 to 60 seconds apart; `/stop` cancels the wait. The Telegram conversation is separate from terminal chat and survives restarts.
 
 The bridge runs only while that Termux session is alive, and Android may kill Termux in the background. `termux-wake-lock` and turning off battery optimization for Termux help, but neither is a guarantee. Running unattended has not been tested yet.
 
@@ -92,9 +95,27 @@ pkill -f "[p]ython -m chelys telegram"     # stop it
 | Tool | Approval |
 |---|---|
 | `list_dir`, `read_file`, `battery_status` | none |
-| `write_file`, `run_shell` | asks y/N in chat; refused in `ask` unless you pass `--allow-risky` |
+| `write_file`, `run_shell` | asks in chat; refused in `ask` unless you pass `--allow-risky` |
+| `skills_list`, `skill_view` | none (owner only) |
+| `skill_manage` | asks, with more choices (see Skills) |
 
 `run_shell` runs commands in Termux with a timeout and kills the whole process group when time runs out. It is not a sandbox. The approval prompt is the safety.
+
+File tools refuse the config folder, the data folder and `~/.ssh` for everyone, so the API key, bot token and history can't be read through them. Guests are limited further, to visible files under `workdir`.
+
+## Skills
+
+A skill is a saved procedure: a `SKILL.md` with a short frontmatter (`name`, `description`) and the steps, pitfalls and preferences for one kind of task, plus optional `references/`, `templates/`, `scripts/` and `assets/` files. Chelys sees a one-line index of her skills, loads the full text with `skill_view` when a task matches, and writes and fixes them with `skill_manage`. This is rebuilt from Hermes Agent's skills subsystem; [docs/hermes/skills.md](docs/hermes/skills.md) has the details and what differs.
+
+Skills live in `~/.local/share/chelys/skills/<category>/<name>/`. You can write them by hand too.
+
+**Approval.** Every skill write asks first, showing what changes as a diff. The answers are allow once, allow for this conversation, always for this skill (stored; `chelys skills revoke NAME` takes it back), and deny. A content scanner refuses text that looks like prompt injection, leaks secrets, or tampers with Chelys's config. Deleting a skill archives it, and `/undo NAME` reverts the last change to a skill.
+
+**`/learn [what]`** asks Chelys to turn something into a skill: a file or folder, pasted text, or with nothing after it, what you just did together.
+
+**Background review.** After every 10 tool-using steps in your conversation, Chelys reviews it once your reply is out and proposes skill changes from what happened: corrections you made, a fix that worked, a skill that turned out wrong. Proposals arrive as cards with Approve and Reject buttons, which don't expire. `/pending` shows them again. Up to 10 wait at a time. While a review runs, new messages wait for it to finish.
+
+**Curator.** Once a week, when Chelys has been idle for 2 hours, skills that the review created and nobody used get marked stale after 14 days and archived after 30. Skills you made or asked for with `/learn`, and pinned ones (`chelys skills pin NAME`), are never touched.
 
 ## Configuration
 
@@ -116,6 +137,9 @@ read_file_bytes = 65536
 history_chars = 40000         # how much past conversation is sent each turn
 compaction = true             # summarize older history instead of dropping it
 autorecover_cycles = 5        # Telegram and chat: wait out an outage this many times; 0 disables
+skill_approval = "ask"        # "off" lets skill writes through without asking
+review_interval = 10          # tool-using steps between background skill reviews
+curator = true                # weekly archive of unused review-made skills
 workdir = "/data/data/com.termux/files/home"
 ```
 
@@ -129,7 +153,8 @@ Files on the phone:
 |---|---|
 | `~/chelys/` | the code |
 | `~/.config/chelys/` | `deepseek.key`, plus `config.toml` and `persona.md` if you add them |
-| `~/.local/share/chelys/history.sqlite3` | conversation history |
+| `~/.local/share/chelys/history.sqlite3` | conversation history, skill revisions and pending changes |
+| `~/.local/share/chelys/skills/` | skills (archived ones under `.archive/`) |
 
 ## Development
 

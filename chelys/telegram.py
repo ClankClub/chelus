@@ -18,8 +18,8 @@ import urllib.error
 import urllib.request
 from typing import Any
 
-from . import provider
-from .agent import Agent
+from . import approval, curator, learn, provider, review, skill_tools, skills
+from .agent import LEARN_STEPS, Agent
 from .config import ConfigError, Settings, load_api_key
 from .store import SessionBusy, Store
 
@@ -27,14 +27,31 @@ API = "https://api.telegram.org"
 MAX_TEXT = 4000            # Telegram's limit is 4096 characters; leave room
 POLL_SECONDS = 50          # long-poll wait on Telegram's side
 APPROVAL_SECONDS = 180     # unanswered approval requests count as "no"
+CARD_DETAIL = 2500         # longest diff or command shown on an approval card
 
 HELP = (
     "Chelys, on the phone.\n"
     "Just talk to me. Commands:\n"
     "/new  start a fresh conversation\n"
+    "/learn [what]  turn something into a skill (empty: what we just did)\n"
+    "/skills  list skills and waiting changes\n"
+    "/pending  show skill changes waiting for your OK\n"
+    "/undo <skill>  undo the last change to a skill\n"
     "/stop  cancel an automatic retry while DeepSeek is down\n"
     "/help  this message"
 )
+GUEST_HELP = (
+    "Chelys, on the phone.\n"
+    "Just talk to me. Commands:\n"
+    "/new  start a fresh conversation\n"
+    "/help  this message"
+)
+OWNER_ONLY = ("/learn", "/skills", "/pending", "/undo")
+# Approval buttons: callback code -> choice
+CODES = {"ok": approval.ONCE, "se": approval.SESSION, "al": approval.ALWAYS, "no": approval.DENY}
+CHOICE_CODES = {v: k for k, v in CODES.items()}
+DONE_LABELS = {approval.ONCE: "Allowed once", approval.SESSION: "Allowed for this conversation",
+               approval.ALWAYS: "Always allowed for this skill", approval.DENY: "Denied"}
 
 
 class TelegramError(Exception):
@@ -144,7 +161,9 @@ class Bridge:
         self.log = log
         self.offset = 0
         self.pending: list[dict[str, Any]] = []   # owner messages that arrived during an approval wait
+        self.callbacks: list[dict[str, Any]] = [] # pending-skill buttons pressed during a wait
         self.ignored = 0
+        self.last_activity = time.monotonic()
 
     # ---- update intake -------------------------------------------------
 
@@ -179,15 +198,20 @@ class Bridge:
 
     # ---- approval through buttons --------------------------------------
 
-    def approve(self, chat_id: int, summary: str) -> bool:
+    def approve(self, chat_id: int, req: str) -> str:
+        """Ask the owner with buttons; returns a choice (approval.ONCE ... DENY)."""
+        if not isinstance(req, approval.Request):
+            req = approval.Request(req)
         nonce = secrets.token_hex(4)
+        buttons = [{"text": approval.CHOICE_LABELS[c], "callback_data": f"{CHOICE_CODES[c]}:{nonce}"}
+                   for c in req.choices]
+        card = req.card()
+        if len(card) > CARD_DETAIL + 400:
+            card = card[:CARD_DETAIL + 400] + "\n... (cut off)"
         self.bot.call("sendMessage", {
             "chat_id": chat_id,
-            "text": f"Allow this?\n{summary}",
-            "reply_markup": {"inline_keyboard": [[
-                {"text": "Yes", "callback_data": f"ok:{nonce}"},
-                {"text": "No", "callback_data": f"no:{nonce}"},
-            ]]},
+            "text": f"Allow this?\n{card}\n\n(No answer in {APPROVAL_SECONDS // 60} min counts as Deny.)",
+            "reply_markup": {"inline_keyboard": [buttons[i:i + 2] for i in range(0, len(buttons), 2)]},
         })
         deadline = time.monotonic() + APPROVAL_SECONDS
         while time.monotonic() < deadline:
@@ -196,18 +220,22 @@ class Bridge:
                 if self._is_owner_callback(u):
                     cq = u["callback_query"]
                     data = cq.get("data", "")
-                    verdict, _, got = data.partition(":")
-                    if got != nonce:
+                    if data.startswith("sk:"):
+                        self.callbacks.append(cq)  # a pending-skill button: handled after this turn
+                        continue
+                    code, _, got = data.partition(":")
+                    if got != nonce or code not in CODES or CODES[code] not in req.choices:
                         self._answer_callback(cq, "That request has expired.")
                         continue
-                    allowed = verdict == "ok"
-                    self._answer_callback(cq, "Approved" if allowed else "Denied")
-                    self._close_buttons(cq, f"{'Approved' if allowed else 'Denied'}: {summary}")
-                    return allowed
+                    choice = CODES[code]
+                    self._answer_callback(cq, DONE_LABELS[choice])
+                    fact = req.detail.split("\n", 1)[0] if req.detail else ""
+                    self._close_buttons(cq, f"{DONE_LABELS[choice]}: {req.title}" + (f"\n{fact}" if fact else ""))
+                    return choice
                 if self._is_owner_message(u):
                     self.pending.append(u["message"])
         self.bot.send(chat_id, "No answer in time, so that action was denied.")
-        return False
+        return approval.DENY
 
     def _answer_callback(self, cq: dict[str, Any], text: str) -> None:
         try:
@@ -243,8 +271,85 @@ class Bridge:
                         return False
                     self.pending.append(m)
                 elif self._is_owner_callback(u):
-                    self._answer_callback(u["callback_query"], "That request has expired.")
+                    self._expired_or_stash(u["callback_query"])
         return True
+
+    def _expired_or_stash(self, cq: dict[str, Any]) -> None:
+        if (cq.get("data") or "").startswith("sk:"):
+            self.callbacks.append(cq)
+        else:
+            self._answer_callback(cq, "That request has expired.")
+
+    # ---- skills: pending changes, commands, the review ------------------
+
+    def send_pending(self, chat_id: int, recs: list[dict[str, Any]] | None = None) -> None:
+        recs = self.make_agent.store.pending() if recs is None else recs
+        for rec in recs:
+            card = skill_tools.pending_card(rec, self.s)
+            if len(card) > CARD_DETAIL + 400:
+                card = card[:CARD_DETAIL + 400] + "\n... (cut off)"
+            self.bot.call("sendMessage", {
+                "chat_id": chat_id, "text": card,
+                "reply_markup": {"inline_keyboard": [[
+                    {"text": "Approve", "callback_data": f"sk:ok:{rec['id']}"},
+                    {"text": "Reject", "callback_data": f"sk:no:{rec['id']}"},
+                ]]},
+            })
+
+    def handle_skill_button(self, cq: dict[str, Any]) -> None:
+        """Approve or reject a pending skill change. These buttons don't expire."""
+        parts = (cq.get("data") or "").split(":", 2)
+        verdict, pid = (parts[1], parts[2]) if len(parts) == 3 else ("", "")
+        store = self.make_agent.store
+        if not pid:
+            self._answer_callback(cq, "That button is broken.")
+            return
+        if verdict == "ok":
+            result = skill_tools.apply_pending(self.s, store, pid)
+        else:
+            result = skill_tools.reject_pending(store, pid)
+        self._answer_callback(cq, result[:180])
+        self._close_buttons(cq, result)
+
+    def skill_command(self, chat_id: int, command: str, arg: str) -> None:
+        store = self.make_agent.store
+        if command == "/skills":
+            found = skills.discover(skills.root(self.s))
+            lines = [f"{k.category or 'general'}/{k.name}: {k.description}" for k in found] or ["No skills yet."]
+            waiting = len(store.pending())
+            if waiting:
+                lines.append(f"\n{waiting} change(s) wait for your OK: /pending")
+            always = store.always_grants()
+            if always:
+                lines.append("Always allowed: " + ", ".join(always))
+            self.bot.send(chat_id, "\n".join(lines))
+        elif command == "/pending":
+            recs = store.pending()
+            if not recs:
+                self.bot.send(chat_id, "No skill changes are waiting.")
+            else:
+                self.send_pending(chat_id, recs)
+        elif command == "/undo":
+            if not arg:
+                self.bot.send(chat_id, "Usage: /undo <skill name>")
+            else:
+                self.bot.send(chat_id, skill_tools.undo(self.s, store, arg.split()[0]))
+
+    def after_reply(self, chat_id: int, agent: Agent) -> None:
+        """The background review, after the reply is out (Hermes runs it the same way)."""
+        if not agent.review_due:
+            return
+        try:
+            self.bot.call("sendChatAction", {"chat_id": chat_id, "action": "typing"})
+        except TelegramError:
+            pass
+        result = review.run(agent)
+        self.log(f"[telegram] {result.summary()}")
+        if result.saved or result.staged or result.skipped:
+            self.bot.send(chat_id, result.summary())
+        if result.staged:
+            store = self.make_agent.store
+            self.send_pending(chat_id, [r for r in store.pending() if r["id"] in result.staged])
 
     # ---- handling owner messages ---------------------------------------
 
@@ -252,13 +357,15 @@ class Bridge:
         chat_id = m["chat"]["id"]
         user = m["from"]["id"]
         is_owner = user == self.owner
+        self.last_activity = time.monotonic()
         text = (m.get("text") or "").strip()
         if not text:
             self.bot.send(chat_id, "I can only read text for now.")
             return
         command = text.split()[0].split("@")[0].lower() if text.startswith("/") else ""
+        arg = text.split(None, 1)[1].strip() if command and len(text.split(None, 1)) > 1 else ""
         if command in ("/start", "/help"):
-            self.bot.send(chat_id, HELP)
+            self.bot.send(chat_id, HELP if is_owner else GUEST_HELP)
             return
         if command == "/new":
             sid = self.make_agent.new_session(user)
@@ -267,6 +374,15 @@ class Bridge:
         if command == "/stop":
             self.bot.send(chat_id, "Nothing to stop right now.")
             return
+        if command in OWNER_ONLY and not is_owner:
+            self.bot.send(chat_id, "That command is for the owner only.")
+            return
+        if command in ("/skills", "/pending", "/undo"):
+            self.skill_command(chat_id, command, arg)
+            return
+        api_text, step_limit = None, None
+        if command == "/learn":
+            api_text, step_limit = learn.build_prompt(arg), LEARN_STEPS
 
         def on_event(kind: str, detail: str) -> None:
             if kind in ("retry", "wait", "guard", "notice"):
@@ -278,11 +394,11 @@ class Bridge:
                     pass
 
         if is_owner:
-            def approve(summary: str) -> bool:
-                return self.approve(chat_id, summary)
+            def approve(req: str) -> str:
+                return self.approve(chat_id, req)
         else:
-            def approve(summary: str) -> bool:
-                self.log(f"[telegram] refused risky tool for guest {user}: {summary}")
+            def approve(req: str) -> bool:
+                self.log(f"[telegram] refused risky tool for guest {user}: {req}")
                 return False  # guests never get risky tools
 
         def autorecover(seconds: float, cycle: int, total: int, error: str) -> bool:
@@ -294,13 +410,29 @@ class Bridge:
         except TelegramError:
             pass
         try:
-            reply = agent.run_turn(text)
+            reply = agent.run_turn(text, api_text=api_text, step_limit=step_limit)
         except (provider.ProviderError, SessionBusy) as e:
             self.bot.send(chat_id, f"[error] {e}")
             return
         if agent.tools_ok:  # only tools that actually ran, not denied or failed calls
             reply = f"[used {', '.join(dict.fromkeys(agent.tools_ok))}]\n{reply}"
         self.bot.send(chat_id, reply)
+        if is_owner:
+            self.after_reply(chat_id, agent)
+        self.last_activity = time.monotonic()
+
+    def housekeeping(self) -> None:
+        """Between polls: buttons pressed during a wait, and the weekly curator."""
+        while self.callbacks:
+            self.handle_skill_button(self.callbacks.pop(0))
+        report = curator.maybe_run(self.s, self.make_agent.store, time.monotonic() - self.last_activity)
+        if report:
+            self.log(f"[telegram] {report}")
+            if "nothing to do" not in report:
+                try:
+                    self.bot.send(self.owner, report)
+                except TelegramError:
+                    pass
 
     def run_forever(self) -> None:
         me = self.bot.call("getMe")
@@ -311,11 +443,16 @@ class Bridge:
             try:
                 while self.pending:
                     self.handle(self.pending.pop(0))
+                self.housekeeping()
                 for u in self._fetch(POLL_SECONDS):
                     if self._is_owner_message(u):
                         self.handle(u["message"])
                     elif self._is_owner_callback(u):
-                        self._answer_callback(u["callback_query"], "That request has expired.")
+                        cq = u["callback_query"]
+                        if (cq.get("data") or "").startswith("sk:"):
+                            self.handle_skill_button(cq)
+                        else:
+                            self._answer_callback(cq, "That request has expired.")
                 backoff = 5
             except TelegramError as e:
                 self.log(f"[telegram] {e}; retrying in {backoff}s")
@@ -362,7 +499,7 @@ class AgentFactory:
         # Unattended surface: the loop guard may stop a turn, and outages are waited out
         # (Hermes does both on its gateway).
         return Agent(self.s, self.api_key, self.store, self.session_for(user), approve, on_event,
-                     hard_stop=True, autorecover=autorecover)
+                     hard_stop=True, autorecover=autorecover, guest=user != self.owner)
 
 
 def run(s: Settings) -> int:
