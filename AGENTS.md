@@ -25,7 +25,8 @@ Make Chelys behave as much like Hermes Agent as a 32-bit phone allows. Port actu
 | `chelys/tools.py` | tool schemas and handlers |
 | `chelys/store.py` | SQLite history and the history window |
 | `chelys/config.py` | settings, `config.toml`, key loading |
-| `chelys/cli.py` | `chat`, `ask`, `sessions`, `show` |
+| `chelys/cli.py` | `chat`, `ask`, `sessions`, `show`, `telegram` |
+| `chelys/telegram.py` | Telegram long-polling bridge, owner-only, approval buttons (imported only by `chelys telegram`) |
 | `scripts/deploy.sh` | copy to the phone over SSH and run the tests there |
 
 Phone access from the dev PC: `ssh galaxy-a10e`.
@@ -45,4 +46,4 @@ v0.1.0 works on the device. Verified on the phone on 2026-10-24 (SM-S102DL, Andr
 
 Not established yet: running unattended or overnight, surviving a reboot, and how often Android kills Termux.
 
-Next: a Telegram bot interface that answers only the owner's user ID and asks for risky-tool approval with Yes/No buttons. Before writing it, check whether Hermes's Telegram gateway code can be ported.
+Telegram bridge: 39 tests pass on the PC and on the phone (fake Telegram API), including guests (`telegram_guests`: own conversation, risky tools always refused). It ran live on the phone on 2026-10-24 and the owner had a real chat through it. The approval buttons have not yet been pressed in a live test. Hermes's Telegram adapter (7,381 lines on python-telegram-bot, httpx and asyncio) was not portable, so its behavior was rebuilt with the standard library.

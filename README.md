@@ -6,7 +6,7 @@ Chelys is inspired by [Hermes Agent](https://github.com/NousResearch/hermes-agen
 
 The name: *chelys* (KEL-iss) is the tortoise shell that baby Hermes turned into the first lyre. A slow, cheap shell made to sing.
 
-**Status:** early. Terminal chat works and is verified on a real device (Samsung Galaxy A10e, Android 11, 32-bit Termux). Telegram is next.
+**Status:** early. Terminal chat and a Telegram bot work on a real device (Samsung Galaxy A10e, Android 11, 32-bit Termux).
 
 ## Requirements
 
@@ -42,6 +42,7 @@ chelys chat --session 3
 chelys ask "how's the battery?"   # one message, then exit
 chelys sessions             # list conversations
 chelys show [N]             # print a conversation
+chelys telegram             # run the Telegram bot bridge (see below)
 ```
 
 In chat: `/new`, `/quit` and `/help`. Ctrl-C cancels the current reply; at the prompt it exits.
@@ -52,6 +53,38 @@ In chat: `/new`, `/quit` and `/help`. Ctrl-C cancels the current reply; at the p
 | 1 | model/API error |
 | 2 | config error |
 | 130 | interrupted |
+
+## Telegram
+
+Chat with Chelys from Telegram. The phone polls Telegram over HTTPS, so it needs no public address and no open ports.
+
+1. Create a bot with [@BotFather](https://t.me/BotFather) and get your numeric user ID, for example from @userinfobot.
+2. Store both on the phone:
+
+   ```sh
+   read -rs TG            # paste the bot token; nothing is shown
+   (umask 077; printf '%s' "$TG" > ~/.config/chelys/telegram.token); unset TG
+   printf '%s' 123456789 > ~/.config/chelys/telegram_user_id   # your ID
+   ```
+
+3. Run the bridge:
+
+   ```sh
+   chelys telegram
+   ```
+
+The bot answers only your user ID in a private chat and drops everything else unread.
+
+**Guests.** To let someone else chat with it, put their numeric user ID in `~/.config/chelys/telegram_guests`, one per line (`#` comments are fine), then restart the bridge. Guests get their own conversation and the safe tools. Risky tools are always refused for guests, and no approval buttons are shown. Remove the line and restart to revoke access. Guests use your DeepSeek key. Risky tools ask for approval with Yes/No buttons. An unanswered request counts as No after 3 minutes. Replies list the tools used. `/new` starts a fresh conversation and `/help` shows the commands. The Telegram conversation is separate from terminal chat and survives restarts.
+
+The bridge runs only while that Termux session is alive, and Android may kill Termux in the background. `termux-wake-lock` and turning off battery optimization for Termux help, but neither is a guarantee. Running unattended has not been tested yet.
+
+To run it detached from an SSH session and log to a file:
+
+```sh
+(nohup setsid chelys telegram > ~/.local/share/chelys/telegram.log 2>&1 < /dev/null &)
+pkill -f "[p]ython -m chelys telegram"     # stop it
+```
 
 ## Tools
 

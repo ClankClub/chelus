@@ -135,6 +135,11 @@ def cmd_show(s: Settings, args: argparse.Namespace) -> int:
         store.close()
 
 
+def cmd_telegram(s: Settings, args: argparse.Namespace) -> int:
+    from . import telegram  # optional feature: only imported when used
+    return telegram.run(s)
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="chelys", description="Chelys: a small agent that lives on this phone.")
     p.add_argument("--version", action="version", version=__version__)
@@ -151,6 +156,7 @@ def build_parser() -> argparse.ArgumentParser:
     session_flags(a)
     a.add_argument("--allow-risky", action="store_true", help="let write_file and run_shell run without asking")
     a.add_argument("text", nargs="+")
+    sub.add_parser("telegram", help="run the Telegram bot bridge (answers only the owner)")
     sub.add_parser("sessions", help="list conversations")
     sh = sub.add_parser("show", help="print a conversation (default: latest)")
     sh.add_argument("session", type=int, nargs="?")
@@ -161,7 +167,8 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if args.command is None:
         args = build_parser().parse_args(["chat", *(argv if argv is not None else sys.argv[1:])])
-    handlers = {"chat": cmd_chat, "ask": cmd_ask, "sessions": cmd_sessions, "show": cmd_show}
+    handlers = {"chat": cmd_chat, "ask": cmd_ask, "sessions": cmd_sessions, "show": cmd_show,
+                "telegram": cmd_telegram}
     try:
         s = load_settings()
         return handlers[args.command](s, args)
