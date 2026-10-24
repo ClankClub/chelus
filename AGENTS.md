@@ -12,7 +12,6 @@ Make Chelys behave as much like Hermes Agent as a 32-bit phone allows. Port actu
 - Never disable TLS verification. Never print, log or commit API keys or bot tokens.
 - Keep the mandatory import path small. Optional features (Telegram, TTS, HTTP fetch) go in modules that nothing imports by default.
 - Risky tools must set `risky=True` so they go through the approval gate.
-- Don't install background services, and don't claim Android background reliability, without testing on the device.
 - Mock tests are mocks. Claims that something works live need a run on the phone.
 - The repo is meant to become public. Keep personal details (IPs, hostnames beyond the `galaxy-a10e` alias, account info) out of it.
 
