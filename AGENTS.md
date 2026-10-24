@@ -35,7 +35,7 @@ Port one subsystem at a time (memory, then skills, and so on), not all of Hermes
 | `chelys/cli.py` | `chat`, `ask`, `sessions`, `show`, `usage`, `telegram` |
 | `chelys/telegram.py` | Telegram long-polling bridge, owner-only, approval buttons, outage countdown with `/stop` (imported only by `chelys telegram`) |
 | `scripts/deploy.sh` | copy to the phone over SSH and run the tests there |
-| `docs/hermes/` | reading notes on Hermes's turn loop; [brain_summary.md](docs/hermes/brain_summary.md) holds the prioritized port list |
+| `docs/hermes/` | reading notes on Hermes; port lists in [brain_summary.md](docs/hermes/brain_summary.md) (turn loop, done) and [skills.md](docs/hermes/skills.md) (skills, not started) |
 
 Phone access from the dev PC: `ssh galaxy-a10e`.
 
