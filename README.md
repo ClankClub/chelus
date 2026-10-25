@@ -4,7 +4,7 @@ Chelys is a small AI agent for 32-bit Android phones running Termux. Its agent l
 
 The project adapts ideas from [Hermes Agent](https://github.com/NousResearch/hermes-agent) for hardware that cannot install its usual dependencies. Chelys is independent of Nous Research. See [NOTICE](NOTICE) for attribution.
 
-**Status:** early, but running on a Samsung Galaxy A10e (Android 11, 32-bit Termux). Terminal chat, Telegram, skills, memory, and conversation search have been exercised on the device. Unattended operation and recovery after a reboot are not yet established.
+**Status:** early, running on a Samsung Galaxy A10e (Android 11, 32-bit Termux). Terminal chat, owner Telegram chat, memory, and conversation search have been exercised live. Skills have automated coverage, but end-to-end Telegram use and unattended/reboot operation remain unverified. See [current verification](docs/STATUS.md).
 
 ## Requirements
 

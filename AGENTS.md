@@ -1,71 +1,23 @@
-# AGENTS.md: Chelys
+# Chelys — agent instructions
 
-Chelys is a stdlib-only agent for 32-bit Android (Termux), inspired by Hermes Agent. Setup and usage are in [README.md](README.md). Hermes attribution is in [NOTICE](NOTICE).
+Chelys is a Python standard-library-only AI agent for 32-bit Android/Termux. Setup and usage: [README.md](README.md). Verified state and gaps: [docs/STATUS.md](docs/STATUS.md). Hermes attribution: [NOTICE](NOTICE).
 
-## Goal
+## Constraints
 
-Make Chelys behave as much like Hermes Agent as a 32-bit phone allows. Port actual Hermes code where a piece can be lifted without dragging in Hermes's dependency tree, and rebuild the behavior otherwise. Hermes's reduced `[termux]` install set is a useful map of which features are worth porting first. Copied Hermes code keeps its MIT notice, and NOTICE lists it.
+- Support 32-bit Termux. No pip dependencies or native Python extensions; keep optional integrations off the default import path.
+- Never disable TLS verification or expose credentials, account details, or private machine information in code, logs, or commits.
+- Preserve safety boundaries: risky tools must have `risky=True` and use the approval gate; file tools must protect config/data/`~/.ssh`; guests stay within `workdir` and cannot access owner-only features.
+- Tests with mocks are not live tests. Verify on the actual phone before claiming device or background reliability.
+- For Hermes ports, read the upstream source, document choices in `docs/hermes/`, and tackle one subsystem at a time. Keep `NOTICE` and any reused-code license notices accurate.
 
-## Rules
+## Code map
 
-- Standard library only. No pip dependencies. Anything built with Rust or C will not install on the target phone (armv8l, `arm-unknown-linux-androideabi`).
-- Never disable TLS verification. Never print, log or commit API keys or bot tokens.
-- Keep the mandatory import path small. Optional features (Telegram, TTS, HTTP fetch) go in modules that nothing imports by default.
-- Risky tools must set `risky=True` so they go through the approval gate.
-- Mock tests are mocks. Claims that something works live need a run on the phone.
-- The repo is meant to become public. Keep personal details (IPs, hostnames beyond the `galaxy-a10e` alias, account info) out of it.
+- `agent.py`, `provider.py`, `store.py`, `compaction.py`: agent loop, API, history.
+- `tools.py`, `approval.py`, `guardrails.py`: tool execution and safety.
+- `telegram.py`, `stats.py`: Telegram bridge and runtime telemetry.
+- `skills.py`, `skill_tools.py`, `learn.py`, `review.py`, `curator.py`: skills and background review.
+- `memory.py`, `session_search.py`: persistent memory and history search.
+- `config.py`, `cli.py`: settings and command-line interface.
+- All modules above are under `chelys/`. Tests live in `tests/`; deployment and optional helpers in `scripts/`.
 
-## Porting from Hermes
-
-Port one subsystem at a time (memory, then skills, and so on), not all of Hermes at once. Read before implementing: read the Hermes source for that subsystem yourself rather than going from memory or a summary, and write notes in `docs/hermes/` as you go. Notes record what Hermes does, its real numbers and rules, and what Chelys should keep or drop for a phone. If you skip a file, say so in the notes and why. Finish with a short prioritized list of what to port, agree on it, then build. Rebuild behavior in your own words; don't paste Hermes code. Notes about "Chelys today" are snapshots, so update the summary, not old notes, when things change.
-
-## Map
-
-| File | Role |
-|---|---|
-| `chelys/agent.py` | turn loop, tool dispatch, limits, truncation handling, grace call, abort notes |
-| `chelys/guardrails.py` | tool-loop guard (warn/block/halt thresholds from Hermes) |
-| `chelys/repetition.py` | detects repetition-dominated replies |
-| `chelys/compaction.py` | summarizes older history (rebuilt from Hermes's context_compressor) |
-| `chelys/provider.py` | DeepSeek HTTP client, retry/backoff, message shaping |
-| `chelys/tools.py` | tool registry, schemas and handlers, file-path confinement, approval card text |
-| `chelys/approval.py` | approval requests (title, the model's purpose, facts) and the once/session/always/deny choices |
-| `chelys/skills.py` | skill library: discovery, frontmatter, index, view, archive |
-| `chelys/skill_tools.py` | `skills_list`, `skill_view`, `skill_manage`: plan, scan, approve or stage, apply, undo |
-| `chelys/skill_guard.py` | content scanner and lint for skill writes |
-| `chelys/learn.py` | the `/learn` prompt |
-| `chelys/review.py` | background review after the reply: skills, memory, or both |
-| `chelys/memory.py` | `memory` tool, MEMORY.md/USER.md store, prompt snapshot, `/memory` |
-| `chelys/session_search.py` | `session_search` over the FTS5 index in store.py |
-| `chelys/curator.py` | weekly stale/archive pass over review-made skills |
-| `chelys/store.py` | SQLite history saved as it happens, soft-archive, turn lease, history window, usage log |
-| `chelys/config.py` | settings, `config.toml`, key loading |
-| `chelys/cli.py` | `chat`, `ask`, `sessions`, `show`, `usage`, `skills`, `telegram` |
-| `chelys/telegram.py` | Telegram long-polling bridge, owner-only, approval buttons, pending-skill cards, skill commands, outage countdown with `/stop` (imported only by `chelys telegram`) |
-| `scripts/deploy.sh` | copy to the phone over SSH and run the tests there |
-| `docs/hermes/` | reading notes on Hermes; port lists in [brain_summary.md](docs/hermes/brain_summary.md) (turn loop, done) [skills.md](docs/hermes/skills.md) (skills, built) and [memory.md](docs/hermes/memory.md) (memory and session search, built) |
-
-Phone access from the dev PC: `ssh galaxy-a10e`.
-
-## Status
-
-v0.1.0 works on the device. Verified on the phone on 2026-10-24 (SM-S102DL, Android 11, Termux Python 3.14.8 armv8l, `deepseek-flash` with thinking off):
-
-| Check | Result |
-|---|---|
-| Test suite | all 24 tests pass |
-| Live tool use | the model chose `battery_status` on its own and answered from the result |
-| One turn | 5.8 s, 18.5 MB peak RSS |
-| Startup | 0.8 s, 16 MB |
-| Resume | a fresh process resumed the conversation and recalled the earlier answer |
-| Failure paths, live | missing key and bad config exit 2; rejected key (401) and timeout exit 1; risky tool refused in `ask` with nothing written; Ctrl-C stops in 0.17 s, exits 130 and saves a "cancelled" note |
-
-Not established yet: running unattended or overnight, surviving a reboot, and how often Android kills Termux.
-
-Telegram bridge: 39 tests pass on the PC and on the phone (fake Telegram API), including guests (`telegram_guests`: own conversation, risky tools always refused). It ran live on the phone on 2026-10-24 and the owner had a real chat through it. The approval buttons have not yet been pressed in a live test. Hermes's Telegram adapter (7,381 lines on python-telegram-bot, httpx and asyncio) was not portable, so its behavior was rebuilt with the standard library.
-
-Ported from Hermes since v0.1.0: all 13 items in [brain_summary.md](docs/hermes/brain_summary.md). Items 1-8 (retries, cache-stable prompt, usage log, truncation, tool-call fixes, grace call, loop guard, `[used ...]` tag) were verified live on the phone on 2026-10-24: 62% cache hits on a short chat and a correct tool tag. Items 9-13 (persist as you go, request deadline, auto-recovery, compaction, turn lease) pass 101 tests on the PC but have not run live yet. Old databases are migrated in place on open.
-
-Skills (all of [skills.md](docs/hermes/skills.md)): built on 2026-10-24, with file-tool confinement (config, data and `~/.ssh` refused for everyone; guests limited to the workdir). 138 tests pass on the PC and the phone. Not yet run live: the bridge on the phone was still running older code when this was written.
-
-Memory and session search (all of [memory.md](docs/hermes/memory.md)): built on 2026-10-24. 209 tests pass on the PC and the phone. Live on the phone with DeepSeek: a save in one conversation was recalled in a new one, and session_search found and read an old conversation. The memory review and pending memory cards have not run live yet.
+Run `python -m unittest discover -s tests -t .` after code changes. Keep setup details in the README and evolving verification in `docs/STATUS.md`, not here.
