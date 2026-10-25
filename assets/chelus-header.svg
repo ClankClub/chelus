@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 430" role="img" aria-labelledby="title desc">
+  <title id="title">Chelus</title>
+  <desc id="desc">A burgundy rounded arch beside the Chelus wordmark and the line 32-bit AI agent for Termux.</desc>
+  <rect width="1600" height="430" rx="20" fill="#f3eee8"/>
+  <rect x="108" y="84" width="278" height="265" rx="53" fill="#720e25"/>
+  <path d="M221 349V256a14 14 0 0 1 14-14h24a14 14 0 0 1 14 14v93Z" fill="#f3eee8"/>
+  <path d="M451 99v236" stroke="#847e7b" stroke-width="2"/>
+  <text x="518" y="254" fill="#720e25" font-family="Georgia, 'Times New Roman', serif" font-size="146" letter-spacing="4">CHELUS</text>
+  <text x="526" y="315" fill="#5f5553" font-family="'Courier New', monospace" font-size="27" letter-spacing="9">32-BIT AI AGENT FOR TERMUX</text>
+</svg>
