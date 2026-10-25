@@ -12,7 +12,7 @@ The project adapts ideas from [Hermes Agent](https://github.com/NousResearch/her
 
 **Status:** early, running on a Samsung Galaxy A10e (Android 11, 32-bit Termux). Terminal chat, owner Telegram chat, memory, and conversation search have been exercised live. Skills have automated coverage, but end-to-end Telegram use and unattended/reboot operation remain unverified. See [current verification](docs/STATUS.md).
 
-**Project name vs. command name:** the repository is now **Chelus**, but the Python package, `chelus` command, script names, and local config/data paths have not yet been renamed. Commands below use the identifiers that work with the current code.
+**Project identifiers:** The repository uses the name **Chelus**; its Python package, command, scripts, and local config/data paths use `chelus`.
 
 [Requirements](#requirements) · [Install](#install) · [Terminal](#terminal-usage) · [Telegram](#telegram) · [Development](#development)
 
