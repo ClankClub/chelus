@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from chelys.stats import RuntimeStats, StatsPreferences
+from chelus.stats import RuntimeStats, StatsPreferences
 from tests.test_telegram import MEMINFO, FOOTER
 
 
@@ -27,7 +27,7 @@ class RuntimeStatsTests(unittest.TestCase):
         import os
         disk = os.statvfs_result((4096, 4096, 5976883, 4744806, 4744700, 1, 1, 1, 0, 255))
         with patch.object(Path, "read_text", autospec=True, side_effect=read), \
-             patch("time.time", return_value=1000), patch("chelys.stats.os.statvfs", return_value=disk) as stat:
+             patch("time.time", return_value=1000), patch("chelus.stats.os.statvfs", return_value=disk) as stat:
             stats = RuntimeStats(Path("/chosen/workdir"))
             self.assertEqual(stats.footer(), FOOTER)
             stat.assert_not_called()
@@ -83,7 +83,7 @@ class RuntimeStatsTests(unittest.TestCase):
 
     def test_disk_failure_is_cached_and_does_not_hide_memory(self):
         with patch.object(Path, "read_text", return_value=MEMINFO), \
-             patch("chelys.stats.os.statvfs", side_effect=PermissionError()) as stat, \
+             patch("chelus.stats.os.statvfs", side_effect=PermissionError()) as stat, \
              patch("time.monotonic", return_value=100):
             stats = RuntimeStats()
             self.assertEqual(stats.footer(("disk", "mem")), FOOTER)
@@ -247,7 +247,7 @@ class PreferencesTests(unittest.TestCase):
             prefs = StatsPreferences(Path(d))
             prefs.set(1111, False)
             before = prefs.path.read_bytes()
-            with patch("chelys.stats.os.replace", side_effect=PermissionError("denied")):
+            with patch("chelus.stats.os.replace", side_effect=PermissionError("denied")):
                 with self.assertRaises(PermissionError):
                     prefs.set(1111, True)
             self.assertFalse(prefs.enabled(1111))
@@ -282,7 +282,7 @@ class PreferencesTests(unittest.TestCase):
             prefs.update(1111, "add", ["swap"])
             prefs.set(1111, False)
             before = prefs.path.read_bytes()
-            with patch("chelys.stats.os.replace", side_effect=PermissionError("denied")):
+            with patch("chelus.stats.os.replace", side_effect=PermissionError("denied")):
                 for action, fields in (("add", ["disk"]), ("remove", ["mem"]), ("reset", [])):
                     with self.assertRaises(PermissionError):
                         prefs.update(1111, action, fields)

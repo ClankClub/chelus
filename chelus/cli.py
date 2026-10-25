@@ -14,8 +14,8 @@ from .store import SessionBusy, Store
 EXIT_OK, EXIT_PROVIDER, EXIT_CONFIG, EXIT_INTERRUPT = 0, 1, 2, 130
 
 CHAT_HELP = ("Commands: /new starts a fresh conversation, /learn [what] turns something into a skill, "
-             "/memory shows what Chelys remembers, /quit exits. Ctrl-C cancels the current reply. "
-             "More: chelys skills --help, chelys memory --help")
+             "/memory shows what Chelus remembers, /quit exits. Ctrl-C cancels the current reply. "
+             "More: chelus skills --help, chelus memory --help")
 CHOICE_KEYS = {"o": approval.ONCE, "y": approval.ONCE, "yes": approval.ONCE, "s": approval.SESSION,
                "a": approval.ALWAYS}
 
@@ -51,7 +51,7 @@ def _wait_out(seconds: float, cycle: int, total: int, error: str) -> bool:
 def _pick_session(store: Store, new: bool, session: int | None) -> int:
     if session is not None:
         if not store.session_exists(session):
-            raise ConfigError(f"no conversation #{session} (see: chelys sessions)")
+            raise ConfigError(f"no conversation #{session} (see: chelus sessions)")
         return session
     if new:
         return store.new_session()
@@ -64,7 +64,7 @@ def cmd_chat(s: Settings, args: argparse.Namespace) -> int:
     try:
         sid = _pick_session(store, args.new, args.session)
         past = len(store.messages(sid))
-        print(f"Chelys {__version__} | {s.model} | conversation #{sid}"
+        print(f"Chelus {__version__} | {s.model} | conversation #{sid}"
               f"{f' (resumed, {past} messages)' if past else ' (new)'}")
         print(CHAT_HELP)
         agent = Agent(s, key, store, sid, _ask_permission, _event, autorecover=_wait_out)
@@ -107,7 +107,7 @@ def cmd_chat(s: Settings, args: argparse.Namespace) -> int:
                     print("\n[review cancelled]")
                     continue
                 if result.staged:
-                    print(f"  ~ {len(result.staged)} change(s) wait for you: chelys skills pending")
+                    print(f"  ~ {len(result.staged)} change(s) wait for you: chelus skills pending")
     finally:
         store.close()
 
@@ -192,7 +192,7 @@ def cmd_skills(s: Settings, args: argparse.Namespace) -> int:
     try:
         act, name = args.action, args.name
         if act in ("view", "approve", "reject", "undo", "pin", "unpin", "revoke") and not name:
-            print(f"usage: chelys skills {act} NAME", file=sys.stderr)
+            print(f"usage: chelus skills {act} NAME", file=sys.stderr)
             return EXIT_CONFIG
         if act == "list":
             found = skills.discover(base)
@@ -245,7 +245,7 @@ def cmd_memory(s: Settings, args: argparse.Namespace) -> int:
         return EXIT_OK
     if args.action == "forget":
         if len(args.rest) != 2:
-            print("usage: chelys memory forget user|memory N", file=sys.stderr)
+            print("usage: chelus memory forget user|memory N", file=sys.stderr)
             return EXIT_CONFIG
         print(memory.forget(s, *args.rest))
         return EXIT_OK
@@ -259,7 +259,7 @@ def cmd_telegram(s: Settings, args: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="chelys", description="Chelys: a small agent that lives on this phone.")
+    p = argparse.ArgumentParser(prog="chelus", description="Chelus: a small agent that lives on this phone.")
     p.add_argument("--version", action="version", version=__version__)
     sub = p.add_subparsers(dest="command")
 
@@ -287,10 +287,10 @@ def build_parser() -> argparse.ArgumentParser:
                     help="list (default); view NAME; pending; approve ID; reject ID; undo NAME (the last change); "
                          "history [NAME]; pin/unpin NAME (curator); revoke NAME (drop 'always'); curate (run now)")
     sk.add_argument("name", nargs="?")
-    me = sub.add_parser("memory", help="show what Chelys remembers, or forget an entry")
+    me = sub.add_parser("memory", help="show what Chelus remembers, or forget an entry")
     me.add_argument("action", nargs="?", default="show", choices=["show", "forget", "path"],
                     help="show (default); forget user|memory N; path (where the files are, to edit by hand). "
-                         "Changes the background review proposes are under: chelys skills pending")
+                         "Changes the background review proposes are under: chelus skills pending")
     me.add_argument("rest", nargs="*")
     return p
 

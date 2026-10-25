@@ -95,9 +95,9 @@ HALT_FINAL = (
 )
 # A crash leaves a turn open; the next turn closes it with these. "May or may not": the
 # process can die after a tool ran but before its result was saved.
-CRASH_RESULT = ("no result recorded: Chelys stopped in the middle of this turn, so this call may or "
+CRASH_RESULT = ("no result recorded: Chelus stopped in the middle of this turn, so this call may or "
                 "may not have run. Check before relying on it.")
-CRASH_NOTE = "[this turn was interrupted: Chelys stopped before it finished{tools}]"
+CRASH_NOTE = "[this turn was interrupted: Chelus stopped before it finished{tools}]"
 MAY_HAVE_RUN = ". Some actions may already have run; check their effects before resending"
 
 
@@ -108,7 +108,7 @@ def approval_ok(answer: object) -> bool:
 def load_persona(s: Settings) -> str:
     if s.persona_path.exists():
         return s.persona_path.read_text(encoding="utf-8").strip()
-    return resources.files("chelys").joinpath("persona_default.md").read_text(encoding="utf-8").strip()
+    return resources.files("chelus").joinpath("persona_default.md").read_text(encoding="utf-8").strip()
 
 
 def disabled_tools(s: Settings, store: Store | None = None) -> tuple[str, ...]:

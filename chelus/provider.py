@@ -260,7 +260,7 @@ def _http_error(e: urllib.error.HTTPError) -> ProviderError:
     except Exception:
         pass
     hints = {
-        401: "the API key was rejected (check ~/.config/chelys/deepseek.key)",
+        401: "the API key was rejected (check ~/.config/chelus/deepseek.key)",
         402: "the DeepSeek account is out of balance",
         429: "rate limited by DeepSeek",
     }

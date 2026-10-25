@@ -1,14 +1,14 @@
-Chelys is inspired by Hermes Agent:
+Chelus is inspired by Hermes Agent:
 
   Hermes Agent, Copyright (c) 2025 Nous Research, MIT License
   https://github.com/NousResearch/hermes-agent
   Reviewed at commit 99fcd6944360925943688d30c39ec9a490ccdeb1 (2026-10-24)
 
-Chelys is an independent project and is not affiliated with or endorsed by
+Chelus is an independent project and is not affiliated with or endorsed by
 Nous Research. "Hermes Agent" is their name for their software.
 
-Chelys contains no verbatim Hermes source files. `chelys/guardrails.py`,
-`chelys/repetition.py` and `chelys/compaction.py` are rebuilt from Hermes's
+Chelus contains no verbatim Hermes source files. `chelus/guardrails.py`,
+`chelus/repetition.py` and `chelus/compaction.py` are rebuilt from Hermes's
 tool_guardrails, repetition_guard and context_compressor modules (same
 thresholds and rules, written independently).
 It borrows design ideas:

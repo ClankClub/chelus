@@ -3,7 +3,7 @@
 Source: NousResearch/hermes-agent @ 99fcd69, MIT. 33 files, ~13,000 lines. Read in the order a turn runs.
 See [conversation_loop.md](conversation_loop.md) for the conductor.
 
-The "Chelys today" notes describe Chelys before the port: atomic turns, no compaction, no lease. For what Chelys does now, see [brain_summary.md](brain_summary.md).
+The "Chelus today" notes describe Chelus before the port: atomic turns, no compaction, no lease. For what Chelus does now, see [brain_summary.md](brain_summary.md).
 
 ## turn_iteration_prep.py (566 lines) — top of each iteration
 
@@ -13,7 +13,7 @@ The "Chelys today" notes describe Chelys before the port: atomic turns, no compa
 - `/steer` text typed during a model call goes in as a *new user row after the newest tool result*, never edited into the already-saved tool row.
 - Optional iteration-budget warning ("you have used N of M iterations; checkpoint progress, then continue; do not stop solely because of this warning"), appended to the newest unsaved tool result.
 - Tool-call arguments are sanitized every iteration, with a cursor so already-checked calls aren't re-parsed.
-- **Role-alternation repair before every request**: tool→user or user→user tails get fixed, because "providers return empty content on them and the empty-retry loop spins." **Chelys:** our history can end in user→user after a failed turn plus a new message (we add a note, so mostly OK). A cheap repair pass before sending is worth porting.
+- **Role-alternation repair before every request**: tool→user or user→user tails get fixed, because "providers return empty content on them and the empty-retry loop spins." **Chelus:** our history can end in user→user after a failed turn plus a new message (we add a note, so mostly OK). A cheap repair pass before sending is worth porting.
 - Hidden interrupt placeholders whose wording the model starts echoing are neutralised on a copy, never deleted (deleting can create tool→user).
 
 **announce_api_call**: prints request size or a spinner. UI only.
@@ -40,7 +40,7 @@ Order is "load-bearing"; each step works on a *copy* (`api_messages`), never on 
 9. build prompt-cache markers LAST;
 10. estimate tokens, floored at real provider usage.
 
-**Chelys relevance:**
+**Chelus relevance:**
 - Orphan sweep: our `recent_window` always starts at a user message, so we never cut between a call and its result. A sweep is still cheap insurance; we already avoid the main way orphans happen.
 - Whitespace + JSON canonicalization on the copy: tiny, helps DeepSeek's prefix cache. Port.
 - Surrogate stripping: our json.dumps would raise on a lone surrogate the model sent back. Port the 3-line sanitizer.
@@ -48,22 +48,22 @@ Order is "load-bearing"; each step works on a *copy* (`api_messages`), never on 
 
 ## turn_preflight_gate.py (102 lines) — "is the request too big?"
 
-Before each call, compare estimated request size against the compression threshold and compress if needed (the work happens in `turn_preflight.py`). Key safeguard: if a compression pass made **insufficient progress**, stop trying this turn instead of compressing again and again. Compares fully assembled requests, not raw history. **Chelys:** no compression yet; we cut old history by characters. When we add compression, copy the "insufficient progress → stop" rule.
+Before each call, compare estimated request size against the compression threshold and compress if needed (the work happens in `turn_preflight.py`). Key safeguard: if a compression pass made **insufficient progress**, stop trying this turn instead of compressing again and again. Compares fully assembled requests, not raw history. **Chelus:** no compression yet; we cut old history by characters. When we add compression, copy the "insufficient progress → stop" rule.
 
 ## turn_api_request.py (185 lines) — finishing the request for this attempt
 
 Rebuilt per *attempt*, because a fallback provider may have different rules. Notable lines:
-- `_reapply_reasoning_echo_for_provider`: "a fallback (DeepSeek / Kimi / MiMo) may require reasoning_content — re-apply the echo-back pad." **The same DeepSeek rule Chelys already follows** (provider.py pads with " ").
+- `_reapply_reasoning_echo_for_provider`: "a fallback (DeepSeek / Kimi / MiMo) may require reasoning_content — re-apply the echo-back pad." **The same DeepSeek rule Chelus already follows** (provider.py pads with " ").
 - `sanitize_outbound_kwargs`: scrub the whole payload, not just messages (tool descriptions, extra fields).
 - OpenRouter caches identical responses *including empty ones*, so an empty-response retry sends a no-cache header. Lesson: a retry that sends the identical request can get the identical bad answer.
-- Request middleware and a `pre_api_request` hook for plugins/observability; `HERMES_DUMP_REQUESTS` env var dumps the payload for debugging. **Chelys:** a `CHELYS_DUMP_REQUESTS` switch would make debugging on the phone much easier. Small port.
+- Request middleware and a `pre_api_request` hook for plugins/observability; `HERMES_DUMP_REQUESTS` env var dumps the payload for debugging. **Chelus:** a `CHELUS_DUMP_REQUESTS` switch would make debugging on the phone much easier. Small port.
 
 ## turn_api_call.py (293 lines) — making the call
 
-- **Streaming is preferred even with no display**, for *liveness*: a streaming connection shows progress, so stalls are detected early instead of waiting out a long timeout. **Chelys:** non-streaming with a 60 s timeout. Streaming would also let Telegram show text sooner. Medium port; noted.
+- **Streaming is preferred even with no display**, for *liveness*: a streaming connection shows progress, so stalls are detected early instead of waiting out a long timeout. **Chelus:** non-streaming with a 60 s timeout. Streaming would also let Telegram show text sooner. Medium port; noted.
 - Calls are interruptible (`_interruptible_api_call`), run inside a middleware wrapper.
 - A correction typed while the model is answering can "cross" the response: the stale response is discarded and the turn rebuilt from the correction.
-- **On interrupt, keep the partial text** as an assistant message marked `interrupted`, so the next turn knows what was half-said. Runaway-repetition partials are replaced with a hidden placeholder ("looped bytes there re-seed the loop"). **Chelys:** on Ctrl-C we keep the user message and a note, but drop any partial text (we have none without streaming).
+- **On interrupt, keep the partial text** as an assistant message marked `interrupted`, so the next turn knows what was half-said. Runaway-repetition partials are replaced with a hidden placeholder ("looped bytes there re-seed the loop"). **Chelus:** on Ctrl-C we keep the user message and a note, but drop any partial text (we have none without streaming).
 - Nous Portal rate-limit guard: Nous-specific, skip.
 
 ## turn_api_error.py (439 lines) — when the call fails
@@ -81,7 +81,7 @@ Order of recovery:
 
 `_is_local_validation_error`: ValueError/TypeError mean our bug, not the network, EXCEPT JSON decode errors, stream-parse errors and SSL errors (SSLError is both an OSError and a ValueError; a TLS failure isn't our bug). Those are retried.
 
-**Chelys relevance (the most important file so far):** Chelys has none of this. One failure = turn over. Minimum viable port:
+**Chelus relevance (the most important file so far):** Chelus has none of this. One failure = turn over. Minimum viable port:
 - classify: timeout / connection reset / 429 / 5xx / JSON-decode → retryable; 400/401/402/403/404/422 → not;
 - retry up to 3 times with growing backoff, honoring `Retry-After` on 429;
 - Ctrl-C must still work during the wait;
@@ -91,7 +91,7 @@ That's maybe 40 lines in provider.py.
 ## turn_response_check.py (352 lines) — "is this response usable?"
 
 After a successful HTTP call:
-1. **Validate the shape** (`validate_response_shape`): missing choices, empty/malformed body → treated like an error. "Empty responses often mean rate limiting," so try a fallback eagerly, else retry with **jittered backoff (5 s base, 120 s max)**, interruptible. **Chelys (corrected after reading provider.py):** a 200 with no choices does *not* crash us. `provider.py` catches KeyError/IndexError and raises `ProviderError("unexpected response…")`, so the turn ends with a saved note. What we lack is the *retry*: Hermes treats it like a transient server error and backs off.
+1. **Validate the shape** (`validate_response_shape`): missing choices, empty/malformed body → treated like an error. "Empty responses often mean rate limiting," so try a fallback eagerly, else retry with **jittered backoff (5 s base, 120 s max)**, interruptible. **Chelus (corrected after reading provider.py):** a 200 with no choices does *not* crash us. `provider.py` catches KeyError/IndexError and raises `ProviderError("unexpected response…")`, so the turn ends with a saved note. What we lack is the *retry*: Hermes treats it like a transient server error and backs off.
 2. Derive `finish_reason`. Some local models say "stop" when they were actually cut off; Hermes detects suspicious stops and treats them as truncation.
 3. `content_filter` → a refusal is deterministic; one fallback try, otherwise return the refusal.
 4. `length` → truncation recovery (`turn_truncation.recover_from_truncation`).
@@ -100,10 +100,10 @@ Note: "bytes back != usable content", so the retry buffer isn't cleared just bec
 
 ## turn_response_intake.py (197 lines) — turning the response into a message
 
-- Normalize to an assistant message whose `content` is always a string: some servers return content as a dict or list, which crashes `.strip()`. **Chelys:** DeepSeek returns strings, but a cheap `str()` guard costs nothing.
+- Normalize to an assistant message whose `content` is always a string: some servers return content as a dict or list, which crashes `.strip()`. **Chelus:** DeepSeek returns strings, but a cheap `str()` guard costs nothing.
 - Post-request hook for observability.
 - Relay a first-line "thinking" preview to the progress display (subagents → parent).
-- **Unclosed reasoning scratchpad** (`<REASONING_SCRATCHPAD>` opened, never closed) = ran out of tokens mid-thought → retry up to 2 times, then save as partial. Models that inline `<think>` tags have the same issue. **Chelys:** DeepSeek keeps reasoning in a separate field; skip.
+- **Unclosed reasoning scratchpad** (`<REASONING_SCRATCHPAD>` opened, never closed) = ran out of tokens mid-thought → retry up to 2 times, then save as partial. Models that inline `<think>` tags have the same issue. **Chelus:** DeepSeek keeps reasoning in a separate field; skip.
 - Codex "incomplete" continuation: skip.
 
 ## turn_tool_round.py (313 lines) — running a batch of tool calls
@@ -120,7 +120,7 @@ Order:
 9. "touch activity" so the gateway's inactivity watchdog (default 1800 s) doesn't kill a long turn.
 Bits: a bare bracketed token like `[memory]` next to a tool call is protocol junk and gets dropped, otherwise it replays forever. Text the model writes *alongside* tool calls is kept as a fallback answer in case the post-tool reply comes back empty.
 
-**Chelys relevance — a real design difference:** Chelys saves the whole turn in one transaction *at the end* (`store.append_turn`). If the phone dies mid-turn after `write_file` ran, history has no record that the file was written. On Ctrl-C/API failure we do note which tools ran, but not on a hard kill (Android OOM-killer, battery death), which is exactly what a phone does. Hermes's rule fits us *better* than it fits a laptop. **Port candidate: persist the assistant tool-call message (and each result) as it happens.** That replaces the "atomic turn" design, so it's a deliberate decision, not a quick patch.
+**Chelus relevance — a real design difference:** Chelus saves the whole turn in one transaction *at the end* (`store.append_turn`). If the phone dies mid-turn after `write_file` ran, history has no record that the file was written. On Ctrl-C/API failure we do note which tools ran, but not on a hard kill (Android OOM-killer, battery death), which is exactly what a phone does. Hermes's rule fits us *better* than it fits a laptop. **Port candidate: persist the assistant tool-call message (and each result) as it happens.** That replaces the "atomic turn" design, so it's a deliberate decision, not a quick patch.
 Also port: keep text-alongside-tool-calls as a fallback answer; dedupe identical calls; mixed-batch handling (we error per call already, so mostly fine).
 
 ## turn_final_response.py (376 lines) — the model answered in plain text
@@ -128,7 +128,7 @@ Also port: keep text-alongside-tool-calls as a fallback answer; dedupe identical
 Guards, in order, before accepting the text as the final answer:
 1. **Reasoning-only clean stop**: some backends file the whole answer under "reasoning." On trusted routes it's promoted to the answer, but never stored as ordinary content.
 2. **Empty / think-only reply** → `turn_empty_response.recover_empty_response` (its own file).
-3. **Stall guard**: the reply ends with an announced next step ("Let me check the file…") but makes no tool call → re-prompt "Continue now. Execute the required tool calls…", **max 2 per turn**. **Chelys:** DeepSeek does this sometimes. Port candidate, high value, small.
+3. **Stall guard**: the reply ends with an announced next step ("Let me check the file…") but makes no tool call → re-prompt "Continue now. Execute the required tool calls…", **max 2 per turn**. **Chelus:** DeepSeek does this sometimes. Port candidate, high value, small.
 4. **Degenerate final**: after real tool work the turn ends on a short fragment → `_DEGENERATE_FINAL_NUDGE`, same counter, max 2.
 5. Join truncated continuation parts.
 6. **Runaway repetition**: a long reply that's the same text looping is discarded with an explanation instead of delivered.
@@ -138,7 +138,7 @@ Guards, in order, before accepting the text as the final answer:
 10. Plugin output transform *before* saving, so what's stored matches what the user saw.
 11. Append the final message and flush to the DB; a flush failure doesn't abort (the finalizer retries).
 
-**Design lesson:** every nudge is **bounded** (2 or 3) and **ephemeral** (never saved). That keeps recovery loops from becoming infinite and keeps history clean. Chelys should adopt both rules for any nudge it adds.
+**Design lesson:** every nudge is **bounded** (2 or 3) and **ephemeral** (never saved). That keeps recovery loops from becoming infinite and keeps history clean. Chelus should adopt both rules for any nudge it adds.
 
 ## turn_empty_response.py (296 lines) — the model said nothing
 
@@ -151,8 +151,8 @@ A ladder. The order matters, and each rung runs only if the one above didn't app
 6. **Fallback provider**, if one is configured; refunds the iteration.
 7. **Terminal `(empty)`**: the saved row holds the sentinel `(empty)`, never the reasoning, so a later "continue" doesn't replay it and loop.
 
-**Chelys today:** `agent.py` returns `msg.get("content") or "(no reply)"`. No nudge, no retry. With thinking off on DeepSeek, rungs 1, 4 and 6 don't apply. **Port candidate: rung 3**, a one-shot nudge when an empty reply follows tool results. That's the common DeepSeek failure. Maybe rung 5 with a budget of 1 or 2. It's a few lines.
-**Watch out:** if the nudge rows are kept they pollute history. Hermes marks them synthetic; Chelys would just not save them, which is easy because our turn list is ours to filter.
+**Chelus today:** `agent.py` returns `msg.get("content") or "(no reply)"`. No nudge, no retry. With thinking off on DeepSeek, rungs 1, 4 and 6 don't apply. **Port candidate: rung 3**, a one-shot nudge when an empty reply follows tool results. That's the common DeepSeek failure. Maybe rung 5 with a budget of 1 or 2. It's a few lines.
+**Watch out:** if the nudge rows are kept they pollute history. Hermes marks them synthetic; Chelus would just not save them, which is easy because our turn list is ours to filter.
 
 ## turn_tool_validation.py (237 lines) — checking tool calls before running them
 
@@ -167,13 +167,13 @@ A ladder. The order matters, and each rung runs only if the one above didn't app
    - Otherwise, the first 2 times: **silently re-request** with nothing appended, which works because sampling is random. The third time: append error results and let the model fix them.
 6. Every exit path keeps role alternation valid: an invalid batch is always answered with *tool* rows, never a user message.
 
-**Chelys today** (`agent._tool_result`): unknown name → `error: no tool named 'x'` (doesn't list valid tools); bad JSON or a non-object → `error: bad arguments…`; both are per call and the batch keeps going, so we already do mixed batches. `max_iterations=8` caps the loop, so there's no infinite strike problem.
+**Chelus today** (`agent._tool_result`): unknown name → `error: no tool named 'x'` (doesn't list valid tools); bad JSON or a non-object → `error: bad arguments…`; both are per call and the batch keeps going, so we already do mixed batches. `max_iterations=8` caps the loop, so there's no infinite strike problem.
 **Port candidates, all tiny:** list valid tool names in the unknown-tool error; treat `""` args as `{}` (we already default `None` to `"{}"` but not `""`); **detect truncated args** (no closing brace) and say "your arguments were cut off, write less" instead of a generic JSON error. That last one matters with `max_tokens=2048` and `write_file`: a long file write is exactly how args get cut off. Name repair and id uniquifying: skip for now, since DeepSeek gives unique ids and real names.
 
 ## turn_retry_state.py (60 lines) — the "already tried that" flags
 
 A dataclass, **created fresh for every API call**, with one boolean per recovery trick (refresh OAuth once, shrink images once, retry 429 once, clamp max_tokens after a 402 once…) plus "restart" signals the outer loop reads (`restart_with_compressed_messages`, `restart_with_length_continuation`, …).
-**The pattern is the lesson:** every recovery fires **at most once per attempt**, so recoveries can't loop on each other. Most of the flags are provider auth Chelys doesn't have. If Chelys grows more than ~2 recoveries, copy the idea as a small dataclass rather than scattering `tried_x = False` locals.
+**The pattern is the lesson:** every recovery fires **at most once per attempt**, so recoveries can't loop on each other. Most of the flags are provider auth Chelus doesn't have. If Chelus grows more than ~2 recoveries, copy the idea as a small dataclass rather than scattering `tried_x = False` locals.
 
 ## turn_loop_errors.py (171 lines) — an exception escaped the turn
 
@@ -185,8 +185,8 @@ A dataclass, **created fresh for every API call**, with one boolean per recovery
 5. **No synthetic assistant message** for non-tool errors, because it would pollute history and could create assistant→assistant.
 6. Stop when: local bug, near max_iterations, or error count ≥ `min(_MAX_OUTER_LOOP_ERRORS, max_iterations)`. Otherwise "fallthrough" retries the iteration.
 
-**Chelys today:** an unexpected exception in `run_turn` propagates; cli/telegram catch it, and `_save_aborted` saves user message + note. Because we save atomically at the end, we can't have orphaned tool calls in the DB, which is the upside of our design. If Chelys switches to persist-as-you-go (see turn_tool_round), **step 4 becomes mandatory**: on load or on error, any assistant tool_call without a result must get a synthetic error result. Hermes calls this "closing the tool sequence."
-Traceback classification: neat, but Chelys has one module that calls the API. Skip.
+**Chelus today:** an unexpected exception in `run_turn` propagates; cli/telegram catch it, and `_save_aborted` saves user message + note. Because we save atomically at the end, we can't have orphaned tool calls in the DB, which is the upside of our design. If Chelus switches to persist-as-you-go (see turn_tool_round), **step 4 becomes mandatory**: on load or on error, any assistant tool_call without a result must get a synthetic error result. Hermes calls this "closing the tool sequence."
+Traceback classification: neat, but Chelus has one module that calls the API. Skip.
 
 ## turn_truncation.py (770 lines) — the reply hit a limit (`finish_reason == "length"`)
 
@@ -206,7 +206,7 @@ Joining fragments (`_join_truncated_parts`, conversation_loop.py): add a newline
 
 Also in this file: Codex `status=incomplete` continuation (max 3, reasoning-only streak → fallback). Skip, we're not on Codex. And `handle_content_policy_refusal`: a 200 with `finish_reason=content_filter` is **deterministic, never retried**. Try the fallback once, else show the refusal text (looking in reasoning or stop_details if the content is empty).
 
-**Chelys today:** text cut off → we deliver it with `[reply cut off: hit max_tokens]` appended. **Tool call cut off → we try to run it anyway.** In practice a cut almost always lands inside the arguments string, so `json.loads` fails and the model gets `error: bad arguments`: a wasted step and a misleading error ("bad JSON" instead of "you wrote too much"), not a half-written file. A half file would need the provider to auto-close truncated JSON, which I have not seen DeepSeek do (unverified). *(Corrected: an earlier version of this note called it a half-file hazard; that was overstated.)* The fix is still worth it: never run calls from a `length` response, retry once with a bigger `max_tokens`, then tell the model to write less (e.g. split the file).
+**Chelus today:** text cut off → we deliver it with `[reply cut off: hit max_tokens]` appended. **Tool call cut off → we try to run it anyway.** In practice a cut almost always lands inside the arguments string, so `json.loads` fails and the model gets `error: bad arguments`: a wasted step and a misleading error ("bad JSON" instead of "you wrote too much"), not a half-written file. A half file would need the provider to auto-close truncated JSON, which I have not seen DeepSeek do (unverified). *(Corrected: an earlier version of this note called it a half-file hazard; that was overstated.)* The fix is still worth it: never run calls from a `length` response, retry once with a bigger `max_tokens`, then tell the model to write less (e.g. split the file).
 **Port, in priority order:**
 1. finish=length **with tool calls** → don't run them; re-request with a higher max_tokens (we can just double once, up to DeepSeek's limit), else tell the user it was cut off. Small, important.
 2. Text continuation: up to 2–4 nudges, then collapse fragments into one saved message. Medium. Our "atomic turn" design makes collapse easy: just don't save the scaffolding rows.
@@ -225,7 +225,7 @@ Not a turn phase but the brain calls it from three places. **Pure stdlib (`math`
 - `RunawayStreamWatch`: the same check run on a live stream at 16k, 32k, 64k… chars, on the tail only, so cost stays linear.
 - `REPETITION_LOOP_INTERRUPTED`: what gets saved *instead of* the looped text, because replaying the loop bytes re-seeds the loop next turn.
 
-**Chelys:** with `max_tokens=2048` (~8k chars) a single reply can't reach the 16k stop-path threshold, so the stop-path check would never fire. It matters only once we add continuation (truncation item 2), where it guards the "continue" nudge. Port it alongside continuation, not before. Cost on the phone: one pass over ≤8k chars, negligible.
+**Chelus:** with `max_tokens=2048` (~8k chars) a single reply can't reach the 16k stop-path threshold, so the stop-path check would never fire. It matters only once we add continuation (truncation item 2), where it guards the "continue" nudge. Port it alongside continuation, not before. Cost on the phone: one pass over ≤8k chars, negligible.
 
 ## turn_finalizer.py (812 lines) — after the loop, before returning
 
@@ -247,10 +247,10 @@ Not a turn phase but the brain calls it from three places. **Pure stdlib (`math`
 10. Build the result dict (tokens, cost, flags), hand leftover `/steer` text back as the next user turn, clear interrupt state.
 11. *After* delivery: external memory sync, background memory/skill review (a forked agent, ~30K tokens, skipped for cron), `on_session_end` hook.
 
-**Chelys today:** at the iteration cap we return `[stopped: hit the limit of 8 model steps…]` with **no summary call**. We never end on a raw tool row, because the loop only returns on text or the cap. Saving is one atomic `append_turn`, so there's no partial-persist trouble. There's no per-turn log line.
+**Chelus today:** at the iteration cap we return `[stopped: hit the limit of 8 model steps…]` with **no summary call**. We never end on a raw tool row, because the loop only returns on text or the cap. Saving is one atomic `append_turn`, so there's no partial-persist trouble. There's no per-turn log line.
 **Port candidates:**
 - **Grace/summary call at the cap** (already on the shortlist): one request with `tools` omitted. Small; a real UX win on 8 steps.
-- **One log line per turn** (exit reason, steps, tools, reply length, maybe latency/tokens) to `~/.local/share/chelys/chelys.log`. Tiny, and it's what we'll want when the bridge runs overnight.
+- **One log line per turn** (exit reason, steps, tools, reply length, maybe latency/tokens) to `~/.local/share/chelus/chelus.log`. Tiny, and it's what we'll want when the bridge runs overnight.
 - **Failed-write footer**: tiny, and honest. Track `write_file` errors per path in the turn; if any survive, append a line.
 - **Surrogate scrub** on the final text: one line (`s.encode("utf-16", "surrogatepass")`-style or a regex on `[\ud800-\udfff]`). Telegram is our main surface.
 - Explain-abnormal-exit: we already write explicit notes; fine as is.
@@ -259,12 +259,12 @@ Not a turn phase but the brain calls it from three places. **Pure stdlib (`math`
 ## turn_stop_gates.py (220 lines) — "are you sure you're done?"
 
 When the model gives a final text answer, four gates can turn it into an *interim* answer plus a user-role nudge and keep the turn going: late language-server errors on files edited this turn (max 3); verify-on-stop (run checks after edits); a `pre_verify` plugin hook; kanban workers that must end with a terminal board tool. The candidate answer is saved as `pending_verification_response`, so if the budget runs out it's delivered instead of nothing. The nudge rows carry a synthetic flag and get stripped by the finalizer, except the LSP note, which is a durable row (stripping it would change bytes already sent and break prompt caching).
-**Chelys:** none of these exist (no LSP, no code-edit verification, no kanban). The **pattern** is the takeaway: a gate keeps the candidate answer as a fallback, so a gate can never make a turn end worse than it would have without it. Revisit if Chelys ever does coding work.
+**Chelus:** none of these exist (no LSP, no code-edit verification, no kanban). The **pattern** is the takeaway: a gate keeps the candidate answer as a fallback, so a gate can never make a turn end worse than it would have without it. Revisit if Chelus ever does coding work.
 
 ## turn_summary.py (209 lines) — the one-line "what this turn did"
 
 Display only, pure functions. `⋯ 12.4s · edited 2 files +18 -3 · read 4 files · ran 3 commands`. Tool name → (verb, noun) table; unknown tools → "called N tools"; edits first, then reads, then commands; >4 segments → "+N more"; a tool-less reply under 2 s prints nothing. **Failed tool calls are not counted**, because "edited 2 files" when one write was denied is the over-claim to avoid.
-**Chelys:** Telegram prefixes `[used list_dir]`. Checked: the `tool` event fires after approval and before the handler, so **denied** calls are already left out, but calls that **error** (`ToolError`/`OSError`) are still listed. That's a small over-claim; fix it by having the tag count only successful calls. A Chelys-sized version of this line (elapsed + verbs) would be ~30 lines, nice for the terminal and Telegram. Low priority, pure polish.
+**Chelus:** Telegram prefixes `[used list_dir]`. Checked: the `tool` event fires after approval and before the handler, so **denied** calls are already left out, but calls that **error** (`ToolError`/`OSError`) are still listed. That's a small over-claim; fix it by having the tag count only successful calls. A Chelus-sized version of this line (elapsed + verbs) would be ~30 lines, nice for the terminal and Telegram. Low priority, pure polish.
 
 ## turn_usage.py (304 lines) — counting tokens after every call
 
@@ -276,7 +276,7 @@ Display only, pure functions. `⋯ 12.4s · edited 2 files +18 -3 · read 4 file
 - **One log line per call:** `API call #N: model=… in=… out=… total=… latency=…s cache=hit/prompt (pct%) write=… id=…`. The comment explains why every field is there: diagnosing cache misses once took a DB join and a live probe because `write=`, `id=` and the upstream weren't on the line.
 - The MoA (mixture-of-agents) folding, Gemini multi-hop prompt correction and Nous wire switching don't apply to us.
 
-**Chelys today:** `provider.py` returns `_usage`, and `agent.py` **pops it and throws it away**. DeepSeek reports `prompt_cache_hit_tokens` / `prompt_cache_miss_tokens`, and cache hits are ~10× cheaper, which is the whole point of keeping the system prompt byte-stable (conversation_loop shortlist item).
+**Chelus today:** `provider.py` returns `_usage`, and `agent.py` **pops it and throws it away**. DeepSeek reports `prompt_cache_hit_tokens` / `prompt_cache_miss_tokens`, and cache hits are ~10× cheaper, which is the whole point of keeping the system prompt byte-stable (conversation_loop shortlist item).
 **Port:** keep usage; per-call log line (`in, out, cache_hit/miss, latency`); per-session totals in the sessions table (two integer columns). Small. It's also how we *verify* the byte-stable prompt works: the cache-hit % should climb across a conversation.
 
 ## turn_explainers.py (275 lines) — the failed-write footer and "why no reply" text
@@ -288,7 +288,7 @@ Backs the finalizer's items 7 and 8.
 - `_format_turn_completion_explanation`: exit reason → a fixed, localized explanation (exact match, then prefix match like `max_iterations_reached(…)`). Healthy `text_response(…)` and unknown reasons produce nothing (don't second-guess). The empty-reply text: "{model} didn't produce a reply this time, even after retries. Send `continue` to try again…"
 - Each feature has a config/env switch, default on, failing safe to on.
 
-**Chelys:** if we port the footer, port the stat trick with it (we have `run_shell`, which can write files the recorder doesn't see). Path identity: `os.path.normcase(os.path.realpath(...))` is enough. ~30 lines total. A fixed exit-reason → text table is a good shape for our existing "[stopped…]"/"[this turn failed…]" notes, keeping them in one place.
+**Chelus:** if we port the footer, port the stat trick with it (we have `run_shell`, which can write files the recorder doesn't see). Path identity: `os.path.normcase(os.path.realpath(...))` is enough. ~30 lines total. A fixed exit-reason → text table is a good shape for our existing "[stopped…]"/"[this turn failed…]" notes, keeping them in one place.
 
 ## turn_liveness.py (250 lines) — the "this turn is stuck" watchdog
 
@@ -299,13 +299,13 @@ A background poller (every 15 s) watches the agent's activity clock, which every
 - Two messages: "attempting recovery" (observational) and "aborted" (only after the abort actually committed). Never claim an outcome that hasn't happened.
 - Config values are validated: NaN would silently disable the timeout, Inf would freeze the poll loop.
 
-**Chelys today:** no watchdog. Each HTTP call has `request_timeout=60`, but in urllib that's a **per-socket-operation** timeout, not a total. A server dripping a byte every 50 s never times out. `run_shell` has a hard 30 s kill. In the Telegram bridge one stuck turn blocks everything (it's a single loop), including the owner.
+**Chelus today:** no watchdog. Each HTTP call has `request_timeout=60`, but in urllib that's a **per-socket-operation** timeout, not a total. A server dripping a byte every 50 s never times out. `run_shell` has a hard 30 s kill. In the Telegram bridge one stuck turn blocks everything (it's a single loop), including the owner.
 **Port candidate (medium, later):** not the thread machinery. Simplest is a **total deadline per API call** (track `time.monotonic()` while reading the body in chunks and abort past N seconds), plus a turn-level wall-clock cap checked between steps. If we ever thread the bridge, copy the "time asleep doesn't count" rule; on Android that's measured by comparing `time.monotonic()` (which pauses in deep sleep on Linux) with `time.time()`. **Needs a check on the device**, because Android's clocks have quirks.
 
 ## turn_facade.py (224 lines) — the front door: `AIAgent.run_conversation`
 
 A wrapper around `conversation_loop.run_conversation`. Before the turn: cancel any background review sharing this session; **admit a durable turn lease** (turn_facade_lease.py) so two processes can't run turns in the same session at once; set up relay/accounting/portal context vars (Nous-platform plumbing). After: record the outcome (`success`/`failed`/`cancelled`/`timed_out`), then in a cascade of nested `finally` blocks release everything in reverse order. Each release is in its own `finally`, so one failing release can't skip the rest. `chat()` is the one-liner: `run_conversation(msg)["final_response"]`.
-**Takeaway for Chelys:** the nested-finally release pattern, plus the question of **two writers on one session.** Today `chelys chat --session N` on the Telegram session, while the bridge runs, would interleave two conversations' turns in one history. Atomic `append_turn` keeps rows intact but the *order* goes wrong. Rare for one owner. Cheap guard if wanted: a lock file per session (`os.open(..., O_CREAT|O_EXCL)`) or a `locked_by_pid` column. Note it, don't build it yet.
+**Takeaway for Chelus:** the nested-finally release pattern, plus the question of **two writers on one session.** Today `chelus chat --session N` on the Telegram session, while the bridge runs, would interleave two conversations' turns in one history. Atomic `append_turn` keeps rows intact but the *order* goes wrong. Rare for one owner. Cheap guard if wanted: a lock file per session (`os.open(..., O_CREAT|O_EXCL)`) or a `locked_by_pid` column. Note it, don't build it yet.
 
 ## turn_facade_lease.py (491 lines) — one writer per session, across processes
 
@@ -317,7 +317,7 @@ The answer to "two writers on one session" above, done properly:
 - Lease renewal ≠ progress: that's why the liveness watchdog exists separately (a wedged turn would renew forever).
 - If a follow-up message interrupts the wait, the earlier never-processed input is carried forward rather than dropped (unless the stop was a hard `/stop`).
 
-**Chelys:** this is the industrial version of the lock-file idea. If we ever need it, the minimal Chelys version is: a `lease_holder, lease_expires` pair on the sessions row, set with one `UPDATE … WHERE lease_expires < now OR lease_holder = me`, checked with `rowcount`, TTL ~5 min, renewed between model steps (no timer thread; our steps are < 60 s), and **reload history after waiting**. ~25 lines. Only needed when two front-ends share a session, which we don't do yet. Keep it on the "later" list.
+**Chelus:** this is the industrial version of the lock-file idea. If we ever need it, the minimal Chelus version is: a `lease_holder, lease_expires` pair on the sessions row, set with one `UPDATE … WHERE lease_expires < now OR lease_holder = me`, checked with `rowcount`, TTL ~5 min, renewed between model steps (no timer thread; our steps are < 60 s), and **reload history after waiting**. ~25 lines. Only needed when two front-ends share a session, which we don't do yet. Keep it on the "later" list.
 
 ## turn_failure_copy.py (481 lines) — what to tell the user when a turn fails
 
@@ -330,7 +330,7 @@ Provider said: …". If the provider gave a reset time, name it ("resets at 14:0
 - `truncated` vs `truncated_unreported`: if the model didn't report hitting the limit, **don't claim it did**. Say "most likely a dropped connection or a router cutting the reply short." Accuracy over a tidy story.
 - `short_detail(exc)`: first line of the exception, capped at 200 chars.
 
-**Chelys today:** already close in spirit. `_http_error_text` maps 401/402/429/5xx to plain hints plus the provider's message (capped at 300). `_save_aborted` names tools that already ran, which is the same principle as `failed_turn_notice`. **Small port:** reword the abort note so that when tools ran it says "some actions may already have run, check before resending," and put the provider detail after the plain sentence rather than in parentheses. Our messages are fine; this is polish.
+**Chelus today:** already close in spirit. `_http_error_text` maps 401/402/429/5xx to plain hints plus the provider's message (capped at 300). `_save_aborted` names tools that already ran, which is the same principle as `failed_turn_notice`. **Small port:** reword the abort note so that when tools ran it says "some actions may already have run, check before resending," and put the provider detail after the plain sentence rather than in parentheses. Our messages are fine; this is polish.
 
 ## turn_preflight.py (396 lines) — "compress before sending?"
 
@@ -340,19 +340,19 @@ Two gates around context compression (the compressor itself is in context_compre
 - If over the threshold but compression is blocked: warn (deduped), and run **`prune_tool_results_only`: deterministic, no LLM.** Old tool-result bodies are replaced by one-line markers, keeping the recent tail. Committed only when it reclaims enough, so prompt-cache breaks stay rare. After a prune, the "file unchanged since you last read it" dedup cache is reset, otherwise a re-read would be refused while the content is gone.
 - Housekeeping note: lines 321–344 repeat the same comment four times. Leftover merge noise. Not everything in Hermes is polished.
 
-**Chelys today:** no compression. `store.recent_window` sends the newest slice under `history_chars=40000` (≈10k tokens), starting at a user message, and older turns just fall off. That's crude, but it can't overflow DeepSeek's window, and it's free.
+**Chelus today:** no compression. `store.recent_window` sends the newest slice under `history_chars=40000` (≈10k tokens), starting at a user message, and older turns just fall off. That's crude, but it can't overflow DeepSeek's window, and it's free.
 **What's worth taking now:** the **deterministic tool-result prune** idea, not LLM summarization. Tool outputs (file reads, shell output, up to 6000 chars each) are the bulk of history. Shrinking tool results *older than the last N turns* to `"[tool output from earlier turn, N chars, dropped]"` would let far more real conversation fit in 40k chars. **Do it in `recent_window` at send time, not in the DB**, so it's reversible and costs nothing. Caveat: changing older bytes breaks DeepSeek's prefix cache. Fine, *if* the cut point only moves occasionally (e.g. prune in blocks), same reasoning as Hermes's "episodic cache breaks." Medium-small. Real summarization stays "large, later."
 
 ## Four small ones
 
-**turn_scripted_prelude.py (63)**: a caller can pass a generator that "plays" tool calls *before* the first model call (used for the desktop onboarding). Each step yields `(text, tool, args)`, runs through the normal `run_tool_round`, and gets the result sent back in. Call ids are deterministic (session + args + position) so replays are byte-stable. **Chelys:** not needed. Mildly interesting as a way to script a first-run "let me check your battery and storage" intro.
+**turn_scripted_prelude.py (63)**: a caller can pass a generator that "plays" tool calls *before* the first model call (used for the desktop onboarding). Each step yields `(text, tool, args)`, runs through the normal `run_tool_round`, and gets the result sent back in. Call ids are deterministic (session + args + position) so replays are byte-stable. **Chelus:** not needed. Mildly interesting as a way to script a first-run "let me check your battery and storage" intro.
 
-**turn_recovery_codex.py (76)**: Codex-only. When the backend rejects stale encrypted reasoning blobs (sometimes disguised as a 401 `token_expired`), strip them and retry once; if it happens again, turn replay off for the session. The bounded escalation (strip some → strip all → disable) is the familiar pattern. **Chelys:** skip.
+**turn_recovery_codex.py (76)**: Codex-only. When the backend rejects stale encrypted reasoning blobs (sometimes disguised as a 401 `token_expired`), strip them and retry once; if it happens again, turn replay off for the session. The bounded escalation (strip some → strip all → disable) is the familiar pattern. **Chelus:** skip.
 
-**turn_author.py (103)**: who wrote the user side of a turn when bots/agents message each other (`HERMES_TURN_AUTHOR` env, `bot:<host>/<profile>` ids). Input hygiene worth copying: `_clean_text` **drops Unicode control/surrogate/unassigned/private-use categories (`Cc, Cs, Cn, Co`)** but keeps format characters, so emoji ZWJ sequences survive, and caps at 200 chars. The env var is **popped**, not just read, so child processes don't inherit it. **Chelys:** if the Telegram bridge ever puts a display name into the prompt ("message from Alex"), clean it this way first. Telegram names are attacker-controlled text.
+**turn_author.py (103)**: who wrote the user side of a turn when bots/agents message each other (`HERMES_TURN_AUTHOR` env, `bot:<host>/<profile>` ids). Input hygiene worth copying: `_clean_text` **drops Unicode control/surrogate/unassigned/private-use categories (`Cc, Cs, Cn, Co`)** but keeps format characters, so emoji ZWJ sequences survive, and caps at 200 chars. The env var is **popped**, not just read, so child processes don't inherit it. **Chelus:** if the Telegram bridge ever puts a display name into the prompt ("message from Alex"), clean it this way first. Telegram names are attacker-controlled text.
 
 **turn_recovery_autorecover.py (116)**: after retries **and** fallbacks are spent, if the error is transient (**5xx, overloaded, timeout only**) and **nothing has been shown to the user yet**, don't give up: park with a visible countdown, *"⏳ Provider temporarily unavailable — retrying automatically in 30s (cycle 2/5); send /stop to cancel"*, then rerun the normal retry loop. Schedule: jittered **15/30/60/60/60 s**; a provider `Retry-After` wins, capped at 120 s. Auth, format, policy, billing, and overflow errors never enter. Default 5 cycles; 0 disables.
-**Chelys:** **this is the one for the Telegram bridge.** On a phone with flaky mobile data, a DeepSeek 503 or a timeout currently ends the turn with an error. With this ladder plus a short in-call retry (turn_api_error notes) the bridge rides out blips by itself. The countdown matters on Telegram: one "retrying in 30s" message beats silence. Port together with the basic retry; ~40 lines more. Needs: classify errors into transient vs not (we have the HTTP code and the exception type, enough), and the bridge must still answer `/stop` during the wait. Today the bridge is single-threaded, so the wait would have to poll Telegram in between. **Design question for the user.**
+**Chelus:** **this is the one for the Telegram bridge.** On a phone with flaky mobile data, a DeepSeek 503 or a timeout currently ends the turn with an error. With this ladder plus a short in-call retry (turn_api_error notes) the bridge rides out blips by itself. The countdown matters on Telegram: one "retrying in 30s" message beats silence. Port together with the basic retry; ~40 lines more. Needs: classify errors into transient vs not (we have the HTTP code and the exception type, enough), and the bridge must still answer `/stop` during the wait. Today the bridge is single-threaded, so the wait would have to poll Telegram in between. **Design question for the user.**
 
 ## turn_overflow.py (511 lines) — the provider said "too big"
 
@@ -364,7 +364,7 @@ Runs after the error is classified, **before** the generic 4xx handler (otherwis
 - **Unexplained rejection:** on a *local* server, if the request is under half the known window and the server quoted no numbers, **don't compress** (that destroys history for nothing). Another request is probably holding the server's slot, so say "wait and /retry." On hosted APIs, believe the rejection and compress.
 - Every attempt counts toward `max_compression_attempts`, so no path loops forever. A 2 s pause between compression retries.
 
-**Chelys:** the sliding window (40k chars ≈ 10–13k tokens) + 6000-char tool clip keep us far below DeepSeek's window, so overflow is near-impossible today. The output-cap case *is* reachable if someone sets `max_tokens` above DeepSeek's per-model cap. **Port (tiny):** if DeepSeek's 400 mentions max_tokens, say "max_tokens in config.toml is above this model's limit" instead of a raw 400. Everything else here waits until we have compression.
+**Chelus:** the sliding window (40k chars ≈ 10–13k tokens) + 6000-char tool clip keep us far below DeepSeek's window, so overflow is near-impossible today. The output-cap case *is* reachable if someone sets `max_tokens` above DeepSeek's per-model cap. **Port (tiny):** if DeepSeek's 400 mentions max_tokens, say "max_tokens in config.toml is above this model's limit" instead of a raw 400. Everything else here waits until we have compression.
 
 ## turn_context_compaction.py (512 lines) — compaction at the start of a turn
 
@@ -377,7 +377,7 @@ Two passes before the first model call, plus the shared helpers the other compac
 - `_rearm_uncompressed_overflow_warn`: cheap gate, `chars ≤ context_length` (≈ ¼ of the window at 4 chars/token) means it can't be over, so skip the real estimate.
 - Same story as before: lines 45–52 duplicate a comment. Lock-skips and cooldowns count as *defers*, never as "incompressible."
 
-**Chelys:** nothing to port until we compress. Two principles to keep for when we do: (1) **measure from real provider usage, not estimates** (we'd need to keep `_usage`; see turn_usage); (2) **every compaction pass must show progress or stop**. Also note the idle-compaction cache logic. On a phone chatting in bursts with long gaps, "compact when coming back from idle" is the natural trigger.
+**Chelus:** nothing to port until we compress. Two principles to keep for when we do: (1) **measure from real provider usage, not estimates** (we'd need to keep `_usage`; see turn_usage); (2) **every compaction pass must show progress or stop**. Also note the idle-compaction cache logic. On a phone chatting in bursts with long gaps, "compact when coming back from idle" is the natural trigger.
 
 ## turn_context.py (1359 lines) — the turn prologue and the wire copy
 
@@ -399,15 +399,15 @@ Two jobs: `build_turn_context` (once per turn, before the loop) and `build_api_m
 
 **The design principle, from the docstring:** *"the system prompt is built ONCE per session and replayed verbatim (stable cache prefix)."* Everything that changes per turn rides in the user message.
 
-**Chelys today (checked agent.py):** `system_prompt(s)` is rebuilt **on every model step** and includes `Local time: %Y-%m-%d %H:%M %Z`. Two consequences:
+**Chelus today (checked agent.py):** `system_prompt(s)` is rebuilt **on every model step** and includes `Local time: %Y-%m-%d %H:%M %Z`. Two consequences:
 1. **The prefix cache breaks every minute.** DeepSeek caches by prefix. The time sits near the top of the system prompt, so everything after it (all history) is a cache miss whenever the minute changes. In a long chat, nearly every turn pays full price for the whole history.
 2. The sliding `recent_window` also shifts its start as old turns fall off, which changes the prefix again. Smaller effect: it happens once per dropped turn, not every minute.
 **Fix (small, high value):** (a) drop the time from the system prompt and prepend `[local time: …]` to the **current user message** at send time; (b) store the system prompt per session (one column) and reuse it, rebuilding only on `/new` or persona change; (c) make the window drop old turns **in blocks** (e.g. cut back to 60% when it hits 100%) so the prefix stays stable between cuts. Verify with DeepSeek's `prompt_cache_hit_tokens` (turn_usage port), which should go from ~0 to most of the prompt.
-**Also:** Chelys saves the user message only at turn end. If the phone dies mid-turn, a Telegram message is gone from history. Persisting the user row at turn start is the same decision as "persist as you go" (turn_tool_round notes).
+**Also:** Chelus saves the user message only at turn end. If the phone dies mid-turn, a Telegram message is gone from history. Persisting the user row at turn start is the same decision as "persist as you go" (turn_tool_round notes).
 
 ## turn_recovery.py (1978 lines) — what happens when the model call throws
 
-About two thirds of this file is provider plumbing that will never touch Chelys: Nous free-tier route healing, Codex/xAI/Vertex/Copilot/Anthropic OAuth refresh, Bedrock SDK fallback, Anthropic fast-mode and 1M-beta, Z.AI overload schedules, llama.cpp grammar, credential-pool rotation, image shrink/strip. Read, noted, skipped. The parts that matter:
+About two thirds of this file is provider plumbing that will never touch Chelus: Nous free-tier route healing, Codex/xAI/Vertex/Copilot/Anthropic OAuth refresh, Bedrock SDK fallback, Anthropic fast-mode and 1M-beta, Z.AI overload schedules, llama.cpp grammar, credential-pool rotation, image shrink/strip. Read, noted, skipped. The parts that matter:
 
 **The pipeline when a call raises** (the order is load-bearing; each step can `return` early):
 1. `recover_before_classification`: repairs that need no classifier. UnicodeEncodeError: strip lone surrogates (clipboard paste) from history, else, only if the *process* locale is really ASCII, strip non-ASCII from the request copy. Never trust the error text alone ("provider-controlled and can mention ascii"). Max 2 passes. Also: a non-ASCII char in the **API key** (bad paste, `ʋ` for `v`) is stripped with a warning.
@@ -431,12 +431,12 @@ About two thirds of this file is provider plumbing that will never touch Chelys:
 - Otherwise `jittered_backoff(attempt, base_delay=2.0, max_delay=60.0)`: `min(2 * 2^(n-1), 60)` plus 0–50% random jitter. So about 2–3, 4–6, 8–12 s… Default max retries is 3 (`api_max_retries`).
 - Note the autorecover ladder (after all this fails) has its own 120 s cap; the two caps are different on purpose.
 
-**Chelys today (checked provider.py, 131 lines):** **zero retries.** Any 429, 5xx, timeout, DNS blip or dropped connection ends the turn with a `ProviderError` and a saved note. On a phone on mobile data, a transient failure is the *most common* failure, so this is the biggest robustness gap in the brain. `_http_error_text` already gives good per-status copy; what's missing is the loop.
+**Chelus today (checked provider.py, 131 lines):** **zero retries.** Any 429, 5xx, timeout, DNS blip or dropped connection ends the turn with a `ProviderError` and a saved note. On a phone on mobile data, a transient failure is the *most common* failure, so this is the biggest robustness gap in the brain. `_http_error_text` already gives good per-status copy; what's missing is the loop.
 
 **Port (small, stdlib, high value):** wrap the `urlopen` in `provider.chat` with:
 - retryable = 429, 500/502/503/504/529, timeout, `URLError`/`OSError` (connection reset, DNS). Not 400/401/402/403/404/422.
 - 3 retries; wait = `Retry-After` (from `e.headers`, capped) else `min(2·2^(n-1), 60)` + jitter.
 - sleep in short slices so Ctrl-C and Telegram `/stop` still work (the bridge is single-threaded, same design question as autorecover).
 - log `attempt n/3 failed: <summary>, retrying in Xs`; the user sees it only if all retries fail, or live if the wait is long.
-- **Never retry after tool results were delivered/streamed?** Not a concern: Chelys doesn't stream, and a failed *request* means no tool ran from it. A retry is safe because the request is idempotent from Chelys's side.
+- **Never retry after tool results were delivered/streamed?** Not a concern: Chelus doesn't stream, and a failed *request* means no tool ran from it. A retry is safe because the request is idempotent from Chelus's side.
 - Skip later: classifier, fallback chain, credential refresh. One provider, one key.

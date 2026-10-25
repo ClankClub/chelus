@@ -6,7 +6,7 @@ arrives. If the phone dies mid-turn, the history still shows what was asked and 
 the agent closes such an open turn the next time it runs (see agent._close_open_turn).
 
 Compaction soft-archives rows (active = 0) instead of deleting them. A per-session lease
-keeps two Chelys processes (say, the terminal and the Telegram bridge) from interleaving
+keeps two Chelus processes (say, the terminal and the Telegram bridge) from interleaving
 turns in one conversation.
 """
 
@@ -109,14 +109,14 @@ MIGRATIONS = {
 
 USAGE_FIELDS = ("calls", "prompt", "completion", "cache_hit", "cache_miss")
 
-# Hermes's turn lease lives 300 s and a timer renews it every 60 s. Chelys has no timer
+# Hermes's turn lease lives 300 s and a timer renews it every 60 s. Chelus has no timer
 # thread and renews only between steps, and one step can include up to 3 provider retries,
 # so the lease lives longer. A holder whose process is gone is reclaimed at once.
 LEASE_TTL_S = 600.0
 
 
 class SessionBusy(Exception):
-    """Another Chelys process is running a turn in this conversation."""
+    """Another Chelus process is running a turn in this conversation."""
 
 
 def _pid_alive(pid: int) -> bool:
@@ -287,7 +287,7 @@ class Store:
             if cur.rowcount == 1:
                 return
         wait = max(0, int(expires - now))
-        raise SessionBusy(f"conversation #{session_id} is busy with a turn in another Chelys process "
+        raise SessionBusy(f"conversation #{session_id} is busy with a turn in another Chelus process "
                           f"({other}); try again shortly, or start a new conversation (lease ends in {wait}s at most)")
 
     def renew_lease(self, session_id: int, holder: str, ttl: float = LEASE_TTL_S) -> None:

@@ -12,9 +12,9 @@ from unittest.mock import patch
 MEMINFO = "MemTotal: 1748992 kB\nMemAvailable: 520192 kB\nSwapTotal: 1572864 kB\nSwapFree: 958464 kB\n"
 FOOTER = "mem 1.2/1.7G"
 
-from chelys import provider, telegram
-from chelys.config import ConfigError
-from chelys.store import Store
+from chelus import provider, telegram
+from chelus.config import ConfigError
+from chelus.store import Store
 from tests.test_agent import FakeModel, make_settings, tool_call
 
 OWNER, STRANGER, GUEST = 1111, 2222, 3333
@@ -95,7 +95,7 @@ class BridgeTests(unittest.TestCase):
         def read(path, *args, **kwargs):
             if str(path) == "/proc/meminfo":
                 return meminfo
-            if str(path) == "/data/local/tmp/chelys-telemetry.json":
+            if str(path) == "/data/local/tmp/chelus-telemetry.json":
                 return cpu_sample
             return read_text(path, *args, **kwargs)
         with patch.object(Path, "read_text", read), self.assertRaises(KeyboardInterrupt):
@@ -118,7 +118,7 @@ class BridgeTests(unittest.TestCase):
         factory = telegram.AgentFactory(self.s, "k", self.store, OWNER)
         bridge = telegram.Bridge(self.s, bot, OWNER, factory)
         bridge.stats.footer = lambda fields: FOOTER
-        with patch("chelys.telegram.skill_tools.pending_card", return_value="Skill change"):
+        with patch("chelus.telegram.skill_tools.pending_card", return_value="Skill change"):
             bridge.send_pending(OWNER, [{"id": "synthetic"}])
         self.assertEqual(bot.texts(), ["Skill change\n\n" + FOOTER])
         self.assertTrue(any("reply_markup" in params for method, params in bot.sent))
@@ -158,7 +158,7 @@ class BridgeTests(unittest.TestCase):
     def test_stats_field_controls_are_local_persistent_and_resettable(self):
         commands = ["/stats add swap up disk", "/stats remove cpu", "/stats info", "/stats off",
                     "/stats reset", "/stats remove mem cpu bat", "/stats info"]
-        with patch("chelys.stats.os.statvfs", side_effect=PermissionError("denied")):
+        with patch("chelus.stats.os.statvfs", side_effect=PermissionError("denied")):
             bot, model, bridge = self.run_bridge([[msg(i, OWNER, t) for i, t in enumerate(commands, 1)]
                                                  + [msg(20, GUEST, "/stats add swap")]], [],
                                                  guests={GUEST}, meminfo=MEMINFO)
@@ -217,7 +217,7 @@ class BridgeTests(unittest.TestCase):
         self.assertEqual("".join(t[:-len(suffix)] for t in bot.texts()), text)
 
     def test_stats_save_failure_reports_unchanged(self):
-        with patch("chelys.stats.os.replace", side_effect=PermissionError("denied")):
+        with patch("chelus.stats.os.replace", side_effect=PermissionError("denied")):
             bot, model, bridge = self.run_bridge([[msg(1, OWNER, "/stats off")]], [], meminfo=MEMINFO)
         self.assertIn("Could not save", bot.texts()[0])
         self.assertIn("unchanged", bot.texts()[0])
@@ -251,7 +251,7 @@ class BridgeTests(unittest.TestCase):
     def test_cpu_cache_file_reaches_footer_not_model_or_history(self):
         cache = self.tmp / "synthetic-telemetry.json"
         cache.write_text(json.dumps({"version": 1, "timestamp": time.time(), "cpu_percent": 12.5, "cpu_temp_c": 31.2}))
-        with patch("chelys.stats.CPU_CACHE_PATH", cache):
+        with patch("chelus.stats.CPU_CACHE_PATH", cache):
             bot, model, _ = self.run_bridge([[msg(1, OWNER, "hi"), msg(2, OWNER, "/stats off"),
                                              msg(3, OWNER, "/stats info")]],
                                            [{"role": "assistant", "content": "hello"}], meminfo=MEMINFO)
@@ -380,7 +380,7 @@ class BridgeTests(unittest.TestCase):
     def test_new_and_help_commands(self):
         bot, model, _ = self.run_bridge([[msg(1, OWNER, "/help"), msg(2, OWNER, "/new")]], [])
         self.assertEqual(model.calls, [])
-        self.assertTrue(bot.texts()[0].startswith("Chelys"))
+        self.assertTrue(bot.texts()[0].startswith("Chelus"))
         self.assertTrue(bot.texts()[1].startswith("Started conversation #"))
 
     def test_outage_countdown_then_recovery(self):

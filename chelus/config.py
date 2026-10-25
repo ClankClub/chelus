@@ -9,11 +9,11 @@ from pathlib import Path
 
 
 def _config_dir() -> Path:
-    return Path(os.environ.get("CHELYS_CONFIG_DIR", Path.home() / ".config" / "chelys"))
+    return Path(os.environ.get("CHELUS_CONFIG_DIR", Path.home() / ".config" / "chelus"))
 
 
 def _data_dir() -> Path:
-    return Path(os.environ.get("CHELYS_DATA_DIR", Path.home() / ".local" / "share" / "chelys"))
+    return Path(os.environ.get("CHELUS_DATA_DIR", Path.home() / ".local" / "share" / "chelus"))
 
 
 @dataclass
@@ -53,7 +53,7 @@ class Settings:
     # archived after 30 (Hermes's curator, without its LLM pass).
     curator: bool = True
     # Memory (owner only): two small files of facts in every conversation's prompt, written
-    # by Chelys without asking (Hermes's default; the reply shows each write). Limits are in
+    # by Chelus without asking (Hermes's default; the reply shows each write). Limits are in
     # characters (Hermes: 2,200 and 1,375). The memory review runs after this many owner
     # messages (Hermes: 10); 0 turns it off.
     memory: bool = True

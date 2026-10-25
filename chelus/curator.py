@@ -2,7 +2,7 @@
 
 Rebuilt from the deterministic pass of Hermes Agent's curator.py (Nous Research, MIT).
 No daemon: whoever is running (the Telegram bridge's poll loop) asks `maybe_run`, which
-works only when a week has passed since the last run and Chelys has been idle for 2 hours.
+works only when a week has passed since the last run and Chelus has been idle for 2 hours.
 The very first check only starts the clock, so a fresh install never touches the library.
 
 For each skill the background review created (created_by = agent), not pinned, the last

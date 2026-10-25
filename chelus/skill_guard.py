@@ -2,11 +2,11 @@
 linter that only advises.
 
 Hermes's skills_guard has about 100 patterns aimed at third-party skills, and Hermes leaves
-it off for skills its own agent writes. Chelys runs a subset on every skill write, because
+it off for skills its own agent writes. Chelus runs a subset on every skill write, because
 its threat is laundering: text from a guest, a web page or a pasted message turning into a
 skill that every later conversation obeys. So the subset is what launders: prompt
 injection, invisible characters, secrets, sending data out, and instructions to change
-Chelys's own config. Destructive commands only warn, since a skill may legitimately
+Chelus's own config. Destructive commands only warn, since a skill may legitimately
 document cleanup. A pattern preceded closely by a negation ("never send ...") is demoted
 one level, as in Hermes.
 
@@ -55,12 +55,12 @@ PATTERNS: list[tuple[str, str, str, re.Pattern]] = [
     # exfiltration
     (CRITICAL, "exfiltration", "sends a secret-looking variable over the network",
      re.compile(r"\b(curl|wget|fetch|requests\.(get|post)|urllib|nc|ncat)\b[^\n]{0,200}\$\{?\w*(KEY|TOKEN|SECRET|PASS)\w*", _I)),
-    (CRITICAL, "exfiltration", "reads Chelys's key, token or history files",
-     re.compile(r"(deepseek\.key|telegram\.token|telegram_user_id|history\.sqlite3|\.config/chelys|DEEPSEEK_API_KEY|\.ssh/id_)", _I)),
+    (CRITICAL, "exfiltration", "reads Chelus's key, token or history files",
+     re.compile(r"(deepseek\.key|telegram\.token|telegram_user_id|history\.sqlite3|\.config/chelus|DEEPSEEK_API_KEY|\.ssh/id_)", _I)),
     (CRITICAL, "exfiltration", "uses a known data-drop site",
      re.compile(r"\b(webhook\.site|requestbin|pipedream\.net|pastebin\.com|transfer\.sh|ngrok\.io|hookbin|interact\.sh|burpcollaborator)\b", _I)),
     # persistence and self-modification
-    (CRITICAL, "persistence", "tells the reader to change Chelys's settings or start-up files",
+    (CRITICAL, "persistence", "tells the reader to change Chelus's settings or start-up files",
      re.compile(r"\b(edit|modify|change|write|append|overwrite|update|add|replace|delete|remove)\b[^.\n]{0,40}(config\.toml|persona\.md|telegram_guests|AGENTS\.md|CLAUDE\.md|\.bashrc|\.profile|\.zshrc|authorized_keys|crontab|termux/boot|\.termux/boot)", _I)),
     # remote code and destruction: warn
     (HIGH, "remote-code", "pipes a download straight into a shell",

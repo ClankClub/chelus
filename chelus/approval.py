@@ -46,7 +46,7 @@ class Request(str):
     def card(self) -> str:
         """The prompt as plain text, facts first."""
         lines = [self.title]
-        lines.append(f"Why (Chelys's words): {self.purpose}" if self.purpose else "Why: (no reason given)")
+        lines.append(f"Why (Chelus's words): {self.purpose}" if self.purpose else "Why: (no reason given)")
         if self.detail:
             lines += ["", self.detail]
         return "\n".join(lines)

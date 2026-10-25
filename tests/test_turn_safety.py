@@ -11,10 +11,10 @@ import unittest
 import urllib.error
 from unittest import mock
 
-from chelys import agent as agent_mod
-from chelys import compaction, provider
-from chelys.config import Settings
-from chelys.store import SessionBusy, Store, history_chars
+from chelus import agent as agent_mod
+from chelus import compaction, provider
+from chelus.config import Settings
+from chelus.store import SessionBusy, Store, history_chars
 from tests.test_agent import Base, FakeModel, FakeServer, OK_REPLY, tool_call
 
 
@@ -401,7 +401,7 @@ class DeadlineTests(unittest.TestCase):
 
     def test_give_up_keeps_the_error_kind(self):
         s = Settings(api_max_retries=1)
-        with mock.patch("chelys.provider._chat_once", side_effect=transient()):
+        with mock.patch("chelus.provider._chat_once", side_effect=transient()):
             with self.assertRaises(provider.ProviderError) as cm:
                 provider.chat(s, "k", [], [], sleep=lambda w: None)
         self.assertTrue(cm.exception.transient)

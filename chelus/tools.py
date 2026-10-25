@@ -3,7 +3,7 @@
 Risky tools (writing files, running shell commands) go through the agent's permission
 callback before they run. Arbitrary shell access is not a sandbox; the gate is the safety.
 
-File tools never touch Chelys's own config and data directories (API key, bot token,
+File tools never touch Chelus's own config and data directories (API key, bot token,
 history, skills, memory) or ~/.ssh, for anyone. Skills and memory are read and written
 through their own tools, which have their own checks. Guests are further limited to non-hidden paths under
 the working directory.
@@ -67,7 +67,7 @@ def _resolve(s: Settings, path: Any, ctx: Any = None) -> Path:
     real = os.path.realpath(p)
     for root in off_limits(s):
         if _inside(real, os.path.realpath(root)):
-            raise ToolError(f"{p} is off limits: that directory holds Chelys's keys, settings, history "
+            raise ToolError(f"{p} is off limits: that directory holds Chelus's keys, settings, history "
                             "or skills. Use skills_list and skill_view for skills.")
     if getattr(ctx, "guest", False):
         work = os.path.realpath(s.workdir)

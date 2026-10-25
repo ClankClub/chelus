@@ -50,7 +50,7 @@ def _cap(text: str, n: int) -> str:
 
 
 def _who(role: str | None) -> str:
-    return "owner" if role == "user" else "chelys"
+    return "owner" if role == "user" else "chelus"
 
 
 def _line(m: dict[str, Any], n: int, mark: bool = False) -> str:

@@ -1,4 +1,4 @@
-"""Telegram bridge: chat with Chelys from a Telegram bot.
+"""Telegram bridge: chat with Chelus from a Telegram bot.
 
 Long polling over HTTPS with the standard library, so the phone needs no public address
 or open port. Only the owner's user ID, in a private chat, is answered; every other
@@ -31,7 +31,7 @@ APPROVAL_SECONDS = 180     # unanswered approval requests count as "no"
 CARD_DETAIL = 2500         # longest diff or command shown on an approval card
 
 HELP = (
-    "Chelys, on the phone.\n"
+    "Chelus, on the phone.\n"
     "Just talk to me. Commands:\n"
     "/new  start a fresh conversation\n"
     "/learn [what]  turn something into a skill (empty: what we just did)\n"
@@ -47,7 +47,7 @@ HELP = (
     "/help  this message"
 )
 GUEST_HELP = (
-    "Chelys, on the phone.\n"
+    "Chelus, on the phone.\n"
     "Just talk to me. Commands:\n"
     "/new  start a fresh conversation\n"
     "/stats [on|off|info]  toggle/set runtime footer, or show telemetry\n"

@@ -8,9 +8,9 @@ import time
 import unittest
 from pathlib import Path
 
-from chelys import agent as agent_mod
-from chelys import approval, compaction, curator, review, skill_guard, skill_tools, skills, telegram, tools
-from chelys.store import Store
+from chelus import agent as agent_mod
+from chelus import approval, compaction, curator, review, skill_guard, skill_tools, skills, telegram, tools
+from chelus.store import Store
 from tests.test_agent import Base, FakeModel, make_settings, tool_call
 from tests.test_telegram import OWNER, GUEST, FakeBot, msg
 
@@ -462,7 +462,7 @@ class TelegramSkillTests(unittest.TestCase):
         self.assertEqual(len(cards), 1, "the second write needed no prompt")
         labels = [b["text"] for row in cards[0]["reply_markup"]["inline_keyboard"] for b in row]
         self.assertEqual(labels, ["Allow once", "Allow for this conversation", "Always for this skill", "Deny"])
-        self.assertIn("Why (Chelys's words): Save how we did it.", cards[0]["text"])
+        self.assertIn("Why (Chelus's words): Save how we did it.", cards[0]["text"])
         self.assertIsNotNone(skills.find(skills.root(self.s), "a2"))
 
     def test_pending_cards_and_buttons(self):
@@ -473,7 +473,7 @@ class TelegramSkillTests(unittest.TestCase):
                                 "old_string": "Do the thing.", "new_string": "Do the thing briefly."})
         bot, _ = self.run_bridge([[msg(1, OWNER, "/pending")], press_pending("ok")], [])
         card = next(p["text"] for m, p in bot.sent if m == "sendMessage" and "reply_markup" in p)
-        self.assertIn("Why (Chelys's words): Shorter replies.", card)
+        self.assertIn("Why (Chelus's words): Shorter replies.", card)
         self.assertIn("+Do the thing briefly.", card.replace("- 1. ", "").replace("+1. ", "+"))
         self.assertIn("briefly", (skills.root(self.s) / "tone" / "SKILL.md").read_text(encoding="utf-8"))
         self.assertEqual(self.store.pending(), [])

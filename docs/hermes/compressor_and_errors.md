@@ -1,6 +1,6 @@
 # Hermes `context_compressor.py` and `error_classifier.py`, reading notes
 
-Source: NousResearch/hermes-agent @ 99fcd69, MIT. These are the two brain-adjacent files that items 11 and 12 of [brain_summary.md](brain_summary.md) depend on. `chat_completion_helpers.py` (4,014 lines) was not read: it builds requests for the provider zoo, and nothing Chelys ports needs it.
+Source: NousResearch/hermes-agent @ 99fcd69, MIT. These are the two brain-adjacent files that items 11 and 12 of [brain_summary.md](brain_summary.md) depend on. `chat_completion_helpers.py` (4,014 lines) was not read: it builds requests for the provider zoo, and nothing Chelus ports needs it.
 
 ## context_compressor.py (5,744 lines)
 
@@ -32,7 +32,7 @@ Most of the file is defense against incidents in a multi-provider, multi-process
 
 **Cache rule.** Every compaction breaks the prompt-cache prefix. Micro-compaction is off by default for that reason, and prunes are committed only when they reclaim enough tokens (≥ 4,096) to be worth the break.
 
-**For Chelys:** keep phases 1–4 with the same numbers, scaled to DeepSeek's window, and store with soft-archive. Drop the multi-process machinery, images, skills, role-alternation repair (DeepSeek accepts user-after-tool) and the background worker. Compaction runs inside the turn, before the call that needs it.
+**For Chelus:** keep phases 1–4 with the same numbers, scaled to DeepSeek's window, and store with soft-archive. Drop the multi-process machinery, images, skills, role-alternation repair (DeepSeek accepts user-after-tool) and the background worker. Compaction runs inside the turn, before the call that needs it.
 
 ## error_classifier.py (1,577 lines)
 
@@ -46,8 +46,8 @@ The rules that apply to a single provider:
 - **400:** overflow if the message says `context length`, `maximum context`, `token limit`, `too many tokens`, … (should compress). A generic bare 400 on a large session is also treated as probable overflow. Otherwise format_error (abort, don't retry unchanged). 5xx bodies that are really validation errors also count as format_error.
 - **401/403** auth: abort. **402** billing: abort. **404** model_not_found: abort.
 
-**For Chelys:** `provider.py` already retries the right set. Two gaps:
-- Certificate-verification failures are `OSError`s, so Chelys currently retries them 3 times for nothing.
+**For Chelus:** `provider.py` already retries the right set. Two gaps:
+- Certificate-verification failures are `OSError`s, so Chelus currently retries them 3 times for nothing.
 - A context-overflow 400 should trigger compaction rather than fail.
 
 Autorecovery (item 11) applies to exactly server_error, overloaded and timeout, per turn_recovery_autorecover.
