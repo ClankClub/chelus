@@ -4,13 +4,13 @@
   <img src="assets/chelus-header.svg" alt="Chelus — 32-bit AI agent for Termux" width="820">
 </p>
 
-> Chelus is a 32-bit AI agent built to do more with less. Running in Termux on vanilla Python, it calls a crowded Galaxy A10e home.
+> Chelus is a small, persistent AI agent built to do more with less. It runs on a Samsung Galaxy A10e using 32-bit Android/Termux, in an environment too constrained for many modern agent stacks.
 
-Its agent loop, tools, conversation history, memory, skills, and Telegram bridge all run on the phone. Only model requests go to DeepSeek. The local runtime uses Python's standard library, without pip dependencies.
+The core agent loop, tools, conversation history, memory, skills, and Telegram bridge run **on the phone**, using Python's **standard library only** (no pip dependencies). Model inference happens remotely through DeepSeek; optional services and command-line tools can extend the agent without becoming core dependencies. The goal is a capable, inspectable agent for constrained computers—not a model running inference locally, and not a 32-bit-only Python codebase.
 
 The project adapts ideas from [Hermes Agent](https://github.com/NousResearch/hermes-agent) for hardware that cannot install its usual dependencies. Chelus is independent of Nous Research. See [NOTICE](NOTICE) for attribution.
 
-**Status:** early, running on a Samsung Galaxy A10e (Android 11, 32-bit Termux). Terminal chat, owner Telegram chat, memory, and conversation search have been exercised live. Skills have automated coverage, but end-to-end Telegram use and unattended/reboot operation remain unverified. See [current verification](docs/STATUS.md).
+**Status (2026-10-26):** operational, **pre-1.0**, on a Samsung Galaxy A10e (Android 11, 32-bit Termux). The owner has confirmed live operation beyond terminal/Telegram chat: email, deployments through an on-phone Vercel CLI, hosted job storage, wireless ADB operations, and external research/storage tools. **The live setup is ahead of the checked-in source**; those optional integrations are not all supplied by a fresh clone. Base scheduling/cron integration and unattended/reboot reliability still need work. See [current verification and remaining gaps](docs/STATUS.md).
 
 **Project name vs. command name:** the repository is now **Chelus**, but the Python package, `chelys` command, script names, and local config/data paths have not yet been renamed. Commands below use the identifiers that work with the current code.
 
@@ -19,8 +19,10 @@ The project adapts ideas from [Hermes Agent](https://github.com/NousResearch/her
 ## Requirements
 
 - [Termux](https://termux.dev/) with Python 3.11 or newer (tested with 3.14.8 on armv8l).
-- A DeepSeek API key.
+- A DeepSeek API key for model inference.
 - Optional for the `battery_status` tool: the Termux `termux-api` package and the Termux:API app.
+
+**Node.js is not required to run Chelus.** It is installed separately on the owner's phone to support optional tooling, including the Vercel CLI. Likewise, cloud accounts, ADB, and other external CLIs/APIs are enhancements, not runtime dependencies. Other Linux/Python environments are a portability goal, not yet a tested support matrix.
 
 ## Install
 
@@ -115,6 +117,18 @@ Chelus can list and read files, check the battery, write files, and run shell co
 **Skills:** A skill is a saved `SKILL.md` procedure, optionally accompanied by reference files or scripts. Use `/learn [what]` to create one from instructions, files, or a recent workflow. Skill writes require approval by default; `chelys skills` manages pending changes, revisions, pins, and undo. Review may propose changes after a conversation, and the weekly curator archives unused review-created skills (not skills you created or pinned). See [Hermes skills notes](docs/hermes/skills.md) for implementation details.
 
 Conversation history, memories, and skills are stored locally under `~/.local/share/chelys/`; credentials and optional configuration live under `~/.config/chelys/`. The Telegram owner and guests do not share conversation history.
+
+## Beyond the base installation
+
+The owner's **live Galaxy A10e installation** has demonstrated capabilities beyond the currently documented base checkout:
+
+- **Email:** sends, reads, and replies using an AgentMail HTTPS API without a local mail client; a message from Chelus reached an external recipient on 2026-10-26.
+- **Deployment:** runs the Vercel CLI **on the phone** (with separately installed Node.js), creating preview and production deployments. Vercel's remote infrastructure performs the application build, not the phone. One deployed example is the owner-restricted [Chelus Brainstem](https://chelus-brainstem.vercel.app/) job queue.
+- **Durable hosted jobs:** that deployment uses Upstash Redis for state that survives the phone sleeping or going offline. Redis and the application run off-device; the agent runtime remains on the phone.
+- **Device operations:** uses wireless ADB for device and package inspection, including removing and restoring packages in the owner's setup.
+- **External resources:** uses web search/scraping and MEGA cloud storage, in addition to its local procedural skills.
+
+These are **owner-confirmed results from one configured installation**, not claims that every item ships with the Python core or has been reproduced by a clean install from GitHub. Some live changes and integration setup have not yet been reflected in the repository source. Optional tools can depend on additional packages, native binaries, credentials, and external services even though **Chelus itself remains standard-library Python**. The operational evidence and verification boundaries are tracked in [docs/STATUS.md](docs/STATUS.md).
 
 ## Configuration
 
