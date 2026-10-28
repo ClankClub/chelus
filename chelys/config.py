@@ -22,6 +22,7 @@ class Settings:
     base_url: str = "https://api.deepseek.com"
     model: str = "deepseek-flash"
     thinking: bool = False
+    reasoning_effort: str = "high"  # DeepSeek's default; used only when thinking is enabled
     max_tokens: int = 2048
     request_timeout: float = 60.0      # longest wait for any single socket read
     request_deadline: float = 300.0    # longest a whole model request may take
@@ -99,6 +100,8 @@ def load_settings() -> Settings:
             setattr(s, key, type(current)(value))
     if s.skill_approval not in ("ask", "off"):
         raise ConfigError(f"skill_approval in {path} must be \"ask\" or \"off\"")
+    if s.reasoning_effort not in ("low", "high", "max"):
+        raise ConfigError(f"reasoning_effort in {path} must be \"low\", \"high\" or \"max\"")
     return s
 
 

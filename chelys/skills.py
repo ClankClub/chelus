@@ -8,9 +8,9 @@ assets/. Skills live in one root, <data_dir>/skills, optionally one category lev
 (<root>/<category>/<name>/SKILL.md). Archived skills move to <root>/.archive and drop out
 of everything.
 
-Phone limits, not Hermes's: SKILL.md and support files are capped at 6,000 characters (the
-size of one tool result, so a loaded skill is never cut off and stays a modest share of the
-40,000-character history). Depth goes in references/.
+Hermes-aligned authoring limits: SKILL.md and each support file allow 100,000 characters;
+support files also have a 1 MiB UTF-8 byte cap. skill_view has a matching per-tool output
+cap. Separate conversation-history and generic tool-output budgets remain unchanged.
 """
 
 from __future__ import annotations
@@ -28,8 +28,9 @@ NAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 MAX_NAME = 64
 MAX_DESCRIPTION = 1024
 NEW_DESCRIPTION = 60      # a new skill's description; also what the prompt index shows
-MAX_SKILL_CHARS = 6000
-MAX_FILE_CHARS = 6000
+MAX_SKILL_CHARS = 100_000
+MAX_SUPPORT_FILE_CHARS = 100_000
+MAX_SUPPORT_FILE_BYTES = 1_048_576
 ARCHIVE = ".archive"
 
 PRUNED_MARKER = "[SKILL_PRUNED: content lost in compression; reload with skill_view(name='{name}')]"
@@ -132,8 +133,8 @@ def validate_skill_md(text: str, *, new: bool) -> tuple[dict[str, Any], str]:
     if not body.strip():
         raise SkillError("SKILL.md has no body after the frontmatter")
     if len(text) > MAX_SKILL_CHARS:
-        raise SkillError(f"SKILL.md would be {len(text)} characters; the limit on this phone is "
-                         f"{MAX_SKILL_CHARS}. Move depth into a references/ file and point to it from SKILL.md.")
+        raise SkillError(f"SKILL.md would be {len(text):,} characters; the limit is "
+                         f"{MAX_SKILL_CHARS:,}. Move depth into a references/ file and point to it from SKILL.md.")
     return fm, body
 
 
@@ -159,6 +160,18 @@ def check_support_path(file_path: Any) -> str:
         raise SkillError(f"file_path must start with one of {', '.join(d + '/' for d in SUPPORT_DIRS)} "
                          f"and name a file, e.g. 'references/topic.md' (got {file_path!r})")
     return fp
+
+
+def check_support_size(text: str, file_path: str) -> None:
+    """Enforce Hermes's per-support-file character and UTF-8 byte limits."""
+    chars = len(text)
+    size_bytes = len(text.encode("utf-8"))
+    if chars > MAX_SUPPORT_FILE_CHARS:
+        raise SkillError(f"{file_path} would be {chars:,} characters; the limit is "
+                         f"{MAX_SUPPORT_FILE_CHARS:,}. Split it into topic files.")
+    if size_bytes > MAX_SUPPORT_FILE_BYTES:
+        raise SkillError(f"{file_path} would be {size_bytes:,} bytes; the limit is "
+                         f"{MAX_SUPPORT_FILE_BYTES:,} bytes (1 MiB).")
 
 
 # ---- discovery ----

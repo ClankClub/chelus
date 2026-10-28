@@ -11,6 +11,7 @@ the working directory.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -291,6 +292,26 @@ def schemas(names: list[str] | None = None) -> list[dict[str, Any]]:
     return [TOOLS[n].schema() for n in (names if names is not None else TOOLS)]
 
 
+def action_key(s: Settings, name: str, args: dict[str, Any], ctx: Any = None) -> str:
+    """Fingerprint actual effects, never purpose or raw secret-bearing grant metadata."""
+    effect: dict[str, Any] = {"tool": name, "cwd": os.path.realpath(s.workdir)}
+    if name == "run_shell":
+        command = args.get("command")
+        if not isinstance(command, str) or not command.strip():
+            raise ToolError("command must be a non-empty string")
+        effect.update(command=command, timeout=s.shell_timeout)
+    elif name == "write_file":
+        path = _resolve(s, args.get("path"), ctx)
+        content = args.get("content")
+        if not isinstance(content, str):
+            raise ToolError("content must be a string")
+        args["path"] = str(path)  # the card, fingerprint and handler use the same real target
+        effect.update(path=str(path), content=content)
+    else:
+        raise ToolError("no reusable approval for this tool")
+    return hashlib.sha256(json.dumps(effect, sort_keys=True, ensure_ascii=True).encode()).hexdigest()
+
+
 def describe_call(name: str, args: dict[str, Any]) -> approval.Request:
     """What a permission prompt shows: a title written here, the model's stated purpose,
     and the facts (command, path, size). As a string, the old one-line summary."""
@@ -298,7 +319,8 @@ def describe_call(name: str, args: dict[str, Any]) -> approval.Request:
     if name == "run_shell":
         cmd = str(args.get("command"))
         return approval.Request(f"run_shell: {cmd!r}", title="Run a shell command on the phone",
-                                purpose=purpose, detail=f"Command:\n{cmd}")
+                                purpose=purpose, detail=f"Command:\n{cmd}",
+                                choices=(approval.ONCE, approval.SESSION, approval.ALWAYS, approval.DENY))
     if name == "write_file":
         content = args.get("content")
         path = str(args.get("path"))
@@ -313,5 +335,6 @@ def describe_call(name: str, args: dict[str, Any]) -> approval.Request:
             verb = "Write"
         return approval.Request(
             f"write_file: {path!r} ({size} chars)", title=f"{verb} a file on the phone", purpose=purpose,
-            detail=f"File: {path}\nSize: {size} chars, {lines} lines\nStarts with:\n{preview}")
+            detail=f"File: {path}\nSize: {size} chars, {lines} lines\nStarts with:\n{preview}",
+            choices=(approval.ONCE, approval.SESSION, approval.ALWAYS, approval.DENY))
     return approval.Request(f"{name}({json.dumps(args)[:200]})", title=f"Use {name}", purpose=purpose)

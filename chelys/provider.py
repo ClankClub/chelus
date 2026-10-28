@@ -117,6 +117,8 @@ def build_payload(
         "thinking": {"type": "enabled" if s.thinking else "disabled"},
         "stream": False,
     }
+    if s.thinking:
+        payload["reasoning_effort"] = s.reasoning_effort
     if tools:
         payload["tools"] = tools
     return payload

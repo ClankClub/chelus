@@ -154,9 +154,7 @@ def plan(base: Path, args: dict[str, Any], actor: str = "foreground",
         text = args.get("file_content")
         if not isinstance(text, str):
             raise SkillError("write_file needs 'file_content' (the full text of the file)")
-        if len(text) > skills.MAX_FILE_CHARS:
-            raise SkillError(f"{file} would be {len(text)} characters; the limit is {skills.MAX_FILE_CHARS}. "
-                             "Split it into topic files.")
+        skills.check_support_size(text, file)
         verb = "update" if before is not None else "add"
         return _scanned(Change("write_file", name, file, before, text, skill.dir,
                                f"{verb} {file} in '{name}' ({len(text)} chars)"))
@@ -198,8 +196,8 @@ def plan(base: Path, args: dict[str, Any], actor: str = "foreground",
             old_fm = skills.parse_frontmatter(old_parts[0])
             change.lint = skill_guard.new_lint((str(old_fm.get("description", "")), old_parts[1]),
                                                (str(fm.get("description")), body))
-    elif len(after) > skills.MAX_FILE_CHARS:
-        raise SkillError(f"{file} would be {len(after)} characters; the limit is {skills.MAX_FILE_CHARS}")
+    else:
+        skills.check_support_size(after, file)
     return _scanned(change)
 
 
@@ -431,7 +429,7 @@ tools.register(tools.Tool(
                "file_path": {"type": "string",
                              "description": "Optional support file inside the skill, e.g. 'references/topic.md'."}},
               ["name"]),
-    _view, group="skills", max_output=skills.MAX_SKILL_CHARS + 1500))
+    _view, group="skills", max_output=skills.MAX_SUPPORT_FILE_CHARS + 1500))
 
 tools.register(tools.Tool(
     "skill_manage",
@@ -443,8 +441,12 @@ tools.register(tools.Tool(
     "'file_content'); delete (moves the skill to the archive, restorable). Keep the description at most 60 "
     "characters and a self-contained trigger: 'Use when <trigger>. <what it does>.' Write lessons, not "
     "logs: an imperative rule plus one clause of why, no dates or incident stories, one rule per lesson, "
-    "references/ files named by topic (extend one before adding another). SKILL.md is at most "
-    f"{skills.MAX_SKILL_CHARS} characters. The owner sees every change before it is saved and can undo it.",
+    "references/ files named by topic (extend one before adding another). "
+    f"SKILL.md: {skills.MAX_SKILL_CHARS:,} characters; each support file: "
+    f"{skills.MAX_SUPPORT_FILE_CHARS:,} characters and {skills.MAX_SUPPORT_FILE_BYTES:,} bytes (1 MiB). "
+    f"SKILL.md bodies over {skill_guard.SOFT_SKILL_BODY_CHARS:,} characters get a nonblocking warning; "
+    "keep the core around 200 lines and move topic depth to references/. "
+    "The owner sees every change before it is saved and can undo it.",
     tools.obj({
         "action": {"type": "string", "enum": list(ACTIONS)},
         "name": NAME_PARAM,

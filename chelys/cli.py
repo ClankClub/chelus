@@ -14,7 +14,8 @@ from .store import SessionBusy, Store
 EXIT_OK, EXIT_PROVIDER, EXIT_CONFIG, EXIT_INTERRUPT = 0, 1, 2, 130
 
 CHAT_HELP = ("Commands: /new starts a fresh conversation, /learn [what] turns something into a skill, "
-             "/memory shows what Chelys remembers, /quit exits. Ctrl-C cancels the current reply. "
+             "/memory shows what Chelys remembers, /approvals [revoke ID|clear] manages tool grants, "
+             "/quit exits. Ctrl-C cancels the current reply. "
              "More: chelys skills --help, chelys memory --help")
 CHOICE_KEYS = {"o": approval.ONCE, "y": approval.ONCE, "yes": approval.ONCE, "s": approval.SESSION,
                "a": approval.ALWAYS}
@@ -30,7 +31,7 @@ def _ask_permission(req: str) -> str:
     if not isinstance(req, approval.Request):
         req = approval.Request(req)
     print("\n  " + req.card().replace("\n", "\n  "))
-    menu = {approval.ONCE: "[o]nce", approval.SESSION: "[s]ession", approval.ALWAYS: "[a]lways for this skill",
+    menu = {approval.ONCE: "[o]nce", approval.SESSION: "[s]ession", approval.ALWAYS: "[a] " + req.label(approval.ALWAYS),
             approval.DENY: "[N]o"}
     try:
         answer = input("  ? " + "  ".join(menu[c] for c in req.choices) + " ").strip().lower()
@@ -85,6 +86,9 @@ def cmd_chat(s: Settings, args: argparse.Namespace) -> int:
             if line == "/help":
                 print(CHAT_HELP)
                 continue
+            if line == "/approvals" or line.startswith("/approvals "):
+                print(approval.manage(store, line[len("/approvals"):]))
+                continue
             if line == "/memory":
                 print(memory.owner_view(s))
                 continue
@@ -121,7 +125,7 @@ def cmd_ask(s: Settings, args: argparse.Namespace) -> int:
         def approve(summary: str) -> bool:
             return bool(args.allow_risky)
 
-        agent = Agent(s, key, store, sid, approve, _event)
+        agent = Agent(s, key, store, sid, approve, _event, reusable_approvals=False)
         try:
             reply = agent.run_turn(" ".join(args.text))
         except (provider.ProviderError, SessionBusy) as e:
@@ -253,6 +257,15 @@ def cmd_memory(s: Settings, args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def cmd_approvals(s: Settings, args: argparse.Namespace) -> int:
+    store = Store(s.db_path)
+    try:
+        print(approval.manage(store, " ".join(args.rest)))
+        return EXIT_OK
+    finally:
+        store.close()
+
+
 def cmd_telegram(s: Settings, args: argparse.Namespace) -> int:
     from . import telegram  # optional feature: only imported when used
     return telegram.run(s)
@@ -275,6 +288,8 @@ def build_parser() -> argparse.ArgumentParser:
     a.add_argument("--allow-risky", action="store_true", help="let write_file and run_shell run without asking")
     a.add_argument("text", nargs="+")
     sub.add_parser("telegram", help="run the Telegram bot bridge (answers only the owner)")
+    ap = sub.add_parser("approvals", help="list ordinary tool grants; revoke ID or clear")
+    ap.add_argument("rest", nargs="*")
     sub.add_parser("sessions", help="list conversations")
     sh = sub.add_parser("show", help="print a conversation (default: latest)")
     sh.add_argument("session", type=int, nargs="?")
@@ -300,7 +315,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.command is None:
         args = build_parser().parse_args(["chat", *(argv if argv is not None else sys.argv[1:])])
     handlers = {"chat": cmd_chat, "ask": cmd_ask, "sessions": cmd_sessions, "show": cmd_show,
-                "telegram": cmd_telegram, "usage": cmd_usage, "skills": cmd_skills, "memory": cmd_memory}
+                "telegram": cmd_telegram, "usage": cmd_usage, "skills": cmd_skills, "memory": cmd_memory,
+                "approvals": cmd_approvals}
     try:
         s = load_settings()
         return handlers[args.command](s, args)

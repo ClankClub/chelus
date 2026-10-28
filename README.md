@@ -118,6 +118,10 @@ Chelus can list and read files, check the battery, write files, and run shell co
 
 `run_shell` captures at most 65,536 bytes across stdout and stderr; past that, or on timeout or Ctrl-C, it stops the whole process group and returns bounded partial output. Directory listings apply the file-tool policy to each entry, including symlink targets.
 
+**Ordinary tool approvals.** In chat and Telegram, `run_shell` and `write_file` ask by default. **Allow once** approves only that call; **Allow for this conversation** covers both ordinary risky tools in that conversation, including later messages and after a restart. `/new` asks again. **Always this action** remembers only the exact tool, normalized real working directory and target, and effect arguments (the complete command, or file path and content; shell timeout is included). Changing those asks again; changing only Chelys's explanation does not. This is not a command-prefix or global execute-all grant. Deny, unanswered prompts and allow-once do not save grants. Guests can neither use nor manage grants. Skill approvals remain separate.
+
+List ordinary grants with `/approvals` in chat or Telegram, or `chelys approvals` in the terminal. Use `/approvals revoke ID` or `/approvals clear` (terminal: `chelys approvals revoke ID` / `chelys approvals clear`). Listings show the grant ID, scope and tool/fingerprint, not stored commands or file contents. `ask` never reuses these grants: `--allow-risky` is still required explicitly.
+
 Conversation history, memories, and skills are stored locally under `~/.local/share/chelys/`; credentials and optional configuration live under `~/.config/chelys/`. The Telegram owner and guests do not share conversation history.
 
 ## Beyond the base installation
@@ -139,6 +143,7 @@ Optional settings go in `~/.config/chelys/config.toml`. For example:
 ```toml
 model = "deepseek-flash"
 thinking = false
+reasoning_effort = "high"   # low, high or max; sent only when thinking = true
 history_chars = 40000
 max_iterations = 8
 compaction = true
@@ -158,7 +163,7 @@ The defaults and full set of supported keys are in [chelys/config.py](chelys/con
 python -m unittest discover -s tests -t .
 ```
 
-Tests use a fake model and local HTTP server; they do not call DeepSeek. The [deployment script](scripts/deploy.sh) copies a checkout to the target phone via SSH and runs tests there.
+Tests use a fake model and local HTTP server; they do not call DeepSeek.
 
 `sh scripts/deploy.sh` stages a candidate in a temporary folder on the phone (host alias `galaxy-a10e`, or set `CHELYS_HOST`), runs the suite there and reports the real test status. A failing candidate leaves the install untouched; a passing one is copied into place. Stop the bridge before deploying and restart it afterward.
 

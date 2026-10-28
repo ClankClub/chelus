@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import tempfile
 import time
@@ -32,6 +33,8 @@ class FakeBot:
     def __init__(self, script):
         self.script = list(script)
         self.sent = []      # (method, params)
+        self.downloaded_photos = []
+        self.image_data_url = "data:image/jpeg;base64,ZmFrZQ=="
 
     def call(self, method, params=None, wait=0):
         self.sent.append((method, params or {}))
@@ -43,6 +46,10 @@ class FakeBot:
         if method == "getMe":
             return {"username": "fake_bot"}
         return True
+
+    def photo_data_url(self, file_id):
+        self.downloaded_photos.append(file_id)
+        return self.image_data_url
 
     def send(self, chat_id, text, **extra):
         for chunk in telegram.split_text(text):
@@ -321,6 +328,36 @@ class BridgeTests(unittest.TestCase):
         ])
         self.assertEqual(bot.texts(), ["[used list_dir]\nall good"])
 
+    def test_photo_caption_reaches_model_but_is_not_persisted(self):
+        update = msg(1, OWNER, "")
+        update["message"].pop("text")
+        update["message"]["caption"] = "What is in this image?"
+        update["message"]["photo"] = [{"file_id": "small"}, {"file_id": "largest"}]
+        bot, model, _ = self.run_bridge([[update]], [
+            {"role": "assistant", "content": "A test image."},
+        ])
+        self.assertEqual(bot.downloaded_photos, ["largest"])
+        user_msg = next(row for row in model.calls[0] if row.get("role") == "user")
+        parts = user_msg["api_content"]
+        self.assertEqual([part["type"] for part in parts], ["text", "image_url"])
+        self.assertIn("What is in this image?", parts[0]["text"])
+        self.assertEqual(parts[1]["image_url"]["url"], bot.image_data_url)
+        payload = provider.build_payload(self.s, [user_msg], [])
+        self.assertEqual(payload["messages"][0]["content"], parts)
+        history = self.store.messages(self.factory.session_for(OWNER))
+        self.assertNotIn(bot.image_data_url, json.dumps(history))
+
+    def test_photo_without_caption_gets_default_prompt(self):
+        update = msg(1, OWNER, "")
+        update["message"].pop("text")
+        update["message"]["photo"] = [{"file_id": "only-photo"}]
+        bot, model, _ = self.run_bridge([[update]], [
+            {"role": "assistant", "content": "A test image."},
+        ])
+        self.assertEqual(bot.downloaded_photos, ["only-photo"])
+        user_msg = next(row for row in model.calls[0] if row.get("role") == "user")
+        self.assertIn("What is in this image?", user_msg["api_content"][0]["text"])
+
     def test_approval_yes_runs_tool(self):
         target = self.tmp / "made.txt"
         bot, _, _ = self.run_bridge([[msg(1, OWNER, "write it")], press(OWNER, "ok")], [
@@ -454,6 +491,42 @@ class HelperTests(unittest.TestCase):
         with self.assertRaises(telegram.TelegramError) as cm:
             bot.call("getMe")
         self.assertNotIn("SECRET", str(cm.exception))
+
+    def test_photo_download_encodes_data_url(self):
+        bot = telegram.Bot("1:fake", timeout_pad=2, api="https://example.invalid")
+
+        class Response:
+            def __init__(self):
+                self.requested = None
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def read(self, size):
+                self.requested = size
+                return b"fake-jpeg"
+
+        response = Response()
+        with patch.object(bot, "call", return_value={
+                "file_path": "photos/test.jpg", "file_size": 9}) as get_file,              patch("chelys.telegram.urllib.request.urlopen", return_value=response) as download:
+            data_url = bot.photo_data_url("photo-id")
+
+        get_file.assert_called_once_with("getFile", {"file_id": "photo-id"})
+        self.assertEqual(data_url, "data:image/jpeg;base64," + base64.b64encode(b"fake-jpeg").decode("ascii"))
+        self.assertEqual(download.call_args.args[0].full_url,
+                         "https://example.invalid/file/bot1:fake/photos/test.jpg")
+        self.assertEqual(response.requested, telegram.MAX_IMAGE_BYTES + 1)
+
+    def test_oversized_photo_rejected_before_download(self):
+        bot = telegram.Bot("1:fake", api="https://example.invalid")
+        with patch.object(bot, "call", return_value={
+                "file_path": "photos/large.jpg", "file_size": telegram.MAX_IMAGE_BYTES + 1}),              patch("chelys.telegram.urllib.request.urlopen") as download:
+            with self.assertRaisesRegex(telegram.TelegramError, "exceeds"):
+                bot.photo_data_url("photo-id")
+        download.assert_not_called()
 
     def test_config_validation(self):
         with tempfile.TemporaryDirectory() as d:
