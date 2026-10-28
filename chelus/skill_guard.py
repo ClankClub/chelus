@@ -114,13 +114,13 @@ def block_message(found: list[Finding]) -> str:
 
 INCIDENT_REF = re.compile(r"(\b(PR|issue|ticket)\s*#?\d+|#\d{2,}\b|\b20\d\d-\d\d-\d\d\b)", _I)
 MARKETING = re.compile(r"\b(powerful|comprehensive|seamless|advanced|robust|cutting-edge|ultimate)\b", _I)
-SOFT_SKILL_BODY_CHARS = 24_000  # Hermes oversized-body warning; advisory, never blocks
+SOFT_SKILL_BODY_CHARS = 5_000  # advisory, never blocks (Hermes warns at 24,000 for big-context models)
 
 
 def lint(description: str, body: str) -> list[str]:
     notes = []
     if len(body) > SOFT_SKILL_BODY_CHARS:
-        notes.append(f"SKILL.md body is {len(body):,} chars; skill_view loads all of it and it stays in context for the rest of the session. Keep the always-on rules here (~200 lines) and move topic depth into references/<topic>.md, linked from the body.")
+        notes.append(f"SKILL.md body is {len(body):,} chars; skill_view loads all of it and it stays in context for the rest of the session. Keep the always-on rules here (about 100 lines) and move topic depth into references/<topic>.md, linked from the body.")
     if len(description) > 60:
         notes.append(f"description is {len(description)} chars; the skill index shows only the first 60")
     if MARKETING.search(description):

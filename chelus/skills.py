@@ -8,9 +8,10 @@ assets/. Skills live in one root, <data_dir>/skills, optionally one category lev
 (<root>/<category>/<name>/SKILL.md). Archived skills move to <root>/.archive and drop out
 of everything.
 
-Hermes-aligned authoring limits: SKILL.md and each support file allow 100,000 characters;
-support files also have a 1 MiB UTF-8 byte cap. skill_view has a matching per-tool output
-cap. Separate conversation-history and generic tool-output budgets remain unchanged.
+Phone limits, not Hermes's (100,000 and 1 MiB, sized for big-context models): SKILL.md is
+capped at 12,000 characters, because it is read whole and stays in a 40,000-character
+history; support files at 40,000, and skill_view returns them in pages of about 6,000 so
+a long reference costs one page of context at a time.
 """
 
 from __future__ import annotations
@@ -28,9 +29,9 @@ NAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 MAX_NAME = 64
 MAX_DESCRIPTION = 1024
 NEW_DESCRIPTION = 60      # a new skill's description; also what the prompt index shows
-MAX_SKILL_CHARS = 100_000
-MAX_SUPPORT_FILE_CHARS = 100_000
-MAX_SUPPORT_FILE_BYTES = 1_048_576
+MAX_SKILL_CHARS = 12_000
+MAX_SUPPORT_FILE_CHARS = 40_000
+VIEW_PAGE_CHARS = 6_000   # one support-file page, the size of one ordinary tool result
 ARCHIVE = ".archive"
 
 PRUNED_MARKER = "[SKILL_PRUNED: content lost in compression; reload with skill_view(name='{name}')]"
@@ -163,15 +164,28 @@ def check_support_path(file_path: Any) -> str:
 
 
 def check_support_size(text: str, file_path: str) -> None:
-    """Enforce Hermes's per-support-file character and UTF-8 byte limits."""
-    chars = len(text)
-    size_bytes = len(text.encode("utf-8"))
-    if chars > MAX_SUPPORT_FILE_CHARS:
-        raise SkillError(f"{file_path} would be {chars:,} characters; the limit is "
+    if len(text) > MAX_SUPPORT_FILE_CHARS:
+        raise SkillError(f"{file_path} would be {len(text):,} characters; the limit is "
                          f"{MAX_SUPPORT_FILE_CHARS:,}. Split it into topic files.")
-    if size_bytes > MAX_SUPPORT_FILE_BYTES:
-        raise SkillError(f"{file_path} would be {size_bytes:,} bytes; the limit is "
-                         f"{MAX_SUPPORT_FILE_BYTES:,} bytes (1 MiB).")
+
+
+def pages(text: str, size: int = VIEW_PAGE_CHARS) -> list[str]:
+    """Split text into pages of at most size characters, at line ends where possible."""
+    out, cur = [], ""
+    for line in text.splitlines(keepends=True):
+        while len(line) > size:  # one very long line: cut it hard
+            if cur:
+                out.append(cur)
+                cur = ""
+            out.append(line[:size])
+            line = line[size:]
+        if len(cur) + len(line) > size:
+            out.append(cur)
+            cur = ""
+        cur += line
+    if cur or not out:
+        out.append(cur)
+    return out
 
 
 # ---- discovery ----
@@ -337,7 +351,7 @@ def change_note(prompt_index: str, current: dict[str, str]) -> str:
 
 # ---- viewing ----
 
-def view(base: Path, name: str, file_path: str | None = None) -> str:
+def view(base: Path, name: str, file_path: str | None = None, page: int = 1) -> str:
     skill = require(base, name)
     if file_path:
         fp = check_support_path(file_path)
@@ -351,7 +365,14 @@ def view(base: Path, name: str, file_path: str | None = None) -> str:
         data = target.read_bytes()
         if b"\x00" in data[:4096]:
             return f"[{fp} is a binary file, {len(data)} bytes; not shown]"
-        return f"[skill {skill.name}, file {fp}]\n{data.decode('utf-8', errors='replace')}"
+        parts = pages(data.decode("utf-8", errors="replace"))
+        if not 1 <= page <= len(parts):
+            raise SkillError(f"{fp} has {len(parts)} page(s); ask for page 1 to {len(parts)}")
+        if len(parts) == 1:
+            return f"[skill {skill.name}, file {fp}]\n{parts[0]}"
+        more = (f"\n[end of page {page}; for more call skill_view(name, file_path, page={page + 1})]"
+                if page < len(parts) else "\n[end of file]")
+        return f"[skill {skill.name}, file {fp}, page {page} of {len(parts)}]\n{parts[page - 1].rstrip()}{more}"
     text = _read(skill.path)
     files = support_files(skill)
     tail = f"\n\n[skill directory: {skill.dir}]"

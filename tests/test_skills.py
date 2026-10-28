@@ -94,14 +94,14 @@ class LibraryTests(unittest.TestCase):
         self.assertEqual(fm["long"], "folded text")
         self.assertIn("hermes", fm["metadata"])
 
-    def test_hermes_skill_limit_accepts_100k_and_rejects_one_more(self):
+    def test_skill_limit_accepts_12k_and_rejects_one_more(self):
         prefix = "---\nname: sized\ndescription: Use when testing. Does a thing.\n---\n"
         exact = prefix + "x" * (skills.MAX_SKILL_CHARS - len(prefix))
-        self.assertEqual(len(exact), 100_000)
+        self.assertEqual(len(exact), 12_000)
         skills.validate_skill_md(exact, new=True)
         with self.assertRaisesRegex(skills.SkillError, "limit"):
             skills.validate_skill_md(exact + "x", new=True)
-        self.assertEqual(tools.TOOLS["skill_view"].max_output, skills.MAX_SUPPORT_FILE_CHARS + 1500)
+        self.assertEqual(tools.TOOLS["skill_view"].max_output, skills.MAX_SKILL_CHARS + 1500)
 
     def test_discover_categories_index_and_truncation(self):
         s = make_settings(Path(self._tmp.name))
@@ -151,11 +151,11 @@ class GuardTests(unittest.TestCase):
         notes = skill_guard.lint("A powerful comprehensive skill that does far too many things at once.", "# x\n")
         self.assertEqual(len(notes), 3)
 
-    def test_hermes_soft_limit_warns_only_above_24k_body_chars(self):
+    def test_soft_limit_warns_only_above_5k_body_chars(self):
         body = "x" * skill_guard.SOFT_SKILL_BODY_CHARS
         self.assertFalse(any("SKILL.md body" in note for note in skill_guard.lint("Use when testing.", body)))
         notes = skill_guard.lint("Use when testing.", body + "x")
-        self.assertTrue(any("24,001" in note and "~200 lines" in note for note in notes))
+        self.assertTrue(any("5,001" in note and "about 100 lines" in note for note in notes))
 
 
 class ManageTests(Base):
@@ -236,7 +236,7 @@ class ManageTests(Base):
         self.assertFalse(f.exists())
         self.assertIn("nothing to undo", skill_tools.undo(self.s, self.store, "kit"))
 
-    def test_support_files_accept_hermes_size_and_refuse_over_limit(self):
+    def test_support_files_accept_large_size_and_refuse_over_limit(self):
         write_skill(self.s, "larger")
         content = "x" * 7000
         out = self.manage({"action": "write_file", "name": "larger", "purpose": "",
@@ -253,8 +253,37 @@ class ManageTests(Base):
         over_limit = "z" * (skills.MAX_SUPPORT_FILE_CHARS + 1)
         out = self.manage({"action": "write_file", "name": "larger", "purpose": "",
                            "file_path": "references/over.md", "file_content": over_limit})
-        self.assertIn("100,001 characters", out)
+        self.assertIn("40,001 characters", out)
         self.assertFalse((path.parent / "over.md").exists())
+
+    def test_long_support_file_is_read_in_pages(self):
+        write_skill(self.s, "paged")
+        lines = [f"line {i:05d} " + "x" * 80 + "\n" for i in range(400)]  # about 36,000 chars
+        text = "".join(lines)
+        out = self.manage({"action": "write_file", "name": "paged", "purpose": "",
+                           "file_path": "references/long.md", "file_content": text})
+        self.assertTrue(out.startswith("saved:"), out)
+        parts = skills.pages(text)
+        self.assertEqual("".join(parts), text)
+        self.assertTrue(all(len(p) <= skills.VIEW_PAGE_CHARS and p.endswith("\n") for p in parts))
+        view = lambda **kw: tools.TOOLS["skill_view"].handler(
+            self.s, dict(name="paged", file_path="references/long.md", **kw), None)
+        first = view()
+        self.assertIn(f"page 1 of {len(parts)}", first)
+        self.assertIn("page=2", first)
+        self.assertLess(len(first), skills.VIEW_PAGE_CHARS + 300)
+        last = view(page=len(parts))
+        self.assertIn("line 00399", last)
+        self.assertIn("[end of file]", last)
+        with self.assertRaisesRegex(tools.ToolError, "page"):
+            view(page=len(parts) + 1)
+        with self.assertRaisesRegex(tools.ToolError, "whole number"):
+            view(page="2")
+        short = tools.TOOLS["skill_view"].handler(self.s, {"name": "paged"}, None)
+        self.assertNotIn("page 1 of", short)
+
+    def test_pages_cut_a_single_huge_line(self):
+        self.assertEqual([len(p) for p in skills.pages("y" * 13_000)], [6000, 6000, 1000])
 
     def test_undo_refuses_after_a_hand_edit(self):
         self.manage(create_args("hand"))

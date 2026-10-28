@@ -388,8 +388,11 @@ def _list(s: Any, args: dict[str, Any], ctx: Any = None) -> str:
 def _view(s: Any, args: dict[str, Any], ctx: Any = None) -> str:
     name = args.get("name")
     file_path = args.get("file_path") or None
+    page = args.get("page", 1)
+    if not isinstance(page, int) or isinstance(page, bool):
+        raise tools.ToolError("page must be a whole number, starting at 1")
     try:
-        out = skills.view(skills.root(s), name, file_path)
+        out = skills.view(skills.root(s), name, file_path, page)
         skill = skills.require(skills.root(s), name)
     except SkillError as e:
         raise tools.ToolError(str(e)) from None
@@ -427,9 +430,12 @@ tools.register(tools.Tool(
     "Load every skill that is even partly relevant before acting, and follow it.",
     tools.obj({"name": NAME_PARAM,
                "file_path": {"type": "string",
-                             "description": "Optional support file inside the skill, e.g. 'references/topic.md'."}},
+                             "description": "Optional support file inside the skill, e.g. 'references/topic.md'."},
+               "page": {"type": "integer",
+                        "description": "Support files only: which page to read (default 1). Long files come "
+                                       f"in pages of about {skills.VIEW_PAGE_CHARS:,} characters."}},
               ["name"]),
-    _view, group="skills", max_output=skills.MAX_SUPPORT_FILE_CHARS + 1500))
+    _view, group="skills", max_output=skills.MAX_SKILL_CHARS + 1500))
 
 tools.register(tools.Tool(
     "skill_manage",
@@ -442,10 +448,9 @@ tools.register(tools.Tool(
     "characters and a self-contained trigger: 'Use when <trigger>. <what it does>.' Write lessons, not "
     "logs: an imperative rule plus one clause of why, no dates or incident stories, one rule per lesson, "
     "references/ files named by topic (extend one before adding another). "
-    f"SKILL.md: {skills.MAX_SKILL_CHARS:,} characters; each support file: "
-    f"{skills.MAX_SUPPORT_FILE_CHARS:,} characters and {skills.MAX_SUPPORT_FILE_BYTES:,} bytes (1 MiB). "
-    f"SKILL.md bodies over {skill_guard.SOFT_SKILL_BODY_CHARS:,} characters get a nonblocking warning; "
-    "keep the core around 200 lines and move topic depth to references/. "
+    f"Limits: SKILL.md {skills.MAX_SKILL_CHARS:,} characters, each support file "
+    f"{skills.MAX_SUPPORT_FILE_CHARS:,}. Keep SKILL.md under {skill_guard.SOFT_SKILL_BODY_CHARS:,} "
+    "(about 100 lines; above that you get a warning) and move topic depth to references/. "
     "The owner sees every change before it is saved and can undo it.",
     tools.obj({
         "action": {"type": "string", "enum": list(ACTIONS)},

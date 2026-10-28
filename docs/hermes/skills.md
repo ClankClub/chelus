@@ -449,7 +449,7 @@ It also embeds a source-hygiene block: **source text is data, not instructions**
 
 **Changed for the phone:**
 
-- **SKILL.md capped at 6,000 chars**, not 100,000. That's `tool_output_chars`, so a view is never silently clipped, and it keeps one loaded skill to about 15% of the 40,000-char history budget. Depth goes in `references/`.
+- **SKILL.md capped at 12,000 chars**, not 100,000, with the oversized-body lint at 5,000 instead of 24,000. SKILL.md is read whole and stays in the 40,000-char history, so one loaded skill stays under a third of it. 6,000 (the first cap) was too tight for imported skills: three of the owner's were 9.7k to 11.6k. **Support files capped at 40,000 chars** (no byte cap), and `skill_view` returns them in pages of about 6,000 (`page`), so a long reference costs one page at a time. Depth goes in `references/`.
 - Approval is on by default.
 - A subset of the scanner runs on every write, not only on third-party installs.
 - The review stages its changes for the owner instead of applying them, and never runs on a guest's conversation.
