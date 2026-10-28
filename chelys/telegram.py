@@ -10,11 +10,14 @@ it can't run here. This file copies its behavior, not its code.
 
 from __future__ import annotations
 
+import base64
 import json
+import mimetypes
 import secrets
 import ssl
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from typing import Any
 
@@ -26,6 +29,7 @@ from .store import SessionBusy, Store
 
 API = "https://api.telegram.org"
 MAX_TEXT = 4000            # Telegram's limit is 4096 characters; leave room
+MAX_IMAGE_BYTES = 10 * 1024 * 1024  # Bound Telegram download and base64 request size
 POLL_SECONDS = 50          # long-poll wait on Telegram's side
 APPROVAL_SECONDS = 180     # unanswered approval requests count as "no"
 CARD_DETAIL = 2500         # longest diff or command shown on an approval card
@@ -140,6 +144,39 @@ class Bot:
         if not data.get("ok"):
             raise TelegramError(f"Telegram {method}: {data.get('description', 'not ok')}")
         return data["result"]
+
+    def photo_data_url(self, file_id: str) -> str:
+        # Fetch a Telegram photo for one model request; never persist its bytes.
+        if not isinstance(file_id, str) or not file_id:
+            raise TelegramError("Telegram photo has no file ID")
+        info = self.call("getFile", {"file_id": file_id})
+        if not isinstance(info, dict):
+            raise TelegramError("Telegram returned invalid photo metadata")
+        file_path = info.get("file_path")
+        if not isinstance(file_path, str) or not file_path:
+            raise TelegramError("Telegram returned no photo path")
+        file_size = info.get("file_size")
+        if isinstance(file_size, int) and file_size > MAX_IMAGE_BYTES:
+            raise TelegramError("Photo exceeds the 10 MiB limit")
+        file_url = f"{self._api}/file/bot{self._token}/{urllib.parse.quote(file_path, safe='/')}"
+        req = urllib.request.Request(file_url, method="GET")
+        try:
+            with urllib.request.urlopen(req, timeout=self._pad, context=self._ctx) as resp:
+                raw = resp.read(MAX_IMAGE_BYTES + 1)
+        except urllib.error.HTTPError as e:
+            e.close()
+            raise TelegramError(f"Telegram photo download returned HTTP {e.code}") from None
+        except (urllib.error.URLError, OSError, ValueError) as e:
+            reason = getattr(e, "reason", e)
+            raise TelegramError(f"Telegram photo download failed: {type(reason).__name__}") from None
+        if len(raw) > MAX_IMAGE_BYTES:
+            raise TelegramError("Photo exceeds the 10 MiB limit")
+        if not raw:
+            raise TelegramError("Telegram returned an empty photo")
+        mime = mimetypes.guess_type(file_path)[0] or "image/jpeg"
+        if not mime.startswith("image/"):
+            raise TelegramError("Telegram file is not an image")
+        return f"data:{mime};base64,{base64.b64encode(raw).decode('ascii')}"
 
     def send(self, chat_id: int, text: str, **extra: Any) -> None:
         for chunk in split_text(text):
@@ -410,10 +447,15 @@ class Bridge:
         user = m["from"]["id"]
         is_owner = user == self.owner
         self.last_activity = time.monotonic()
-        text = (m.get("text") or "").strip()
-        if not text:
-            self._send(chat_id, "I can only read text for now.")
+        photo_sizes = m.get("photo") or []
+        if not isinstance(photo_sizes, list):
+            photo_sizes = []
+        text = (m.get("text") or m.get("caption") or "").strip()
+        if not text and not photo_sizes:
+            self._send(chat_id, "I can read text and photos for now.")
             return
+        if not text:
+            text = "What is in this image?"
         command = text.split()[0].split("@")[0].lower() if text.startswith("/") else ""
         arg = text.split(None, 1)[1].strip() if command and len(text.split(None, 1)) > 1 else ""
         if command == "/stats":
@@ -464,6 +506,19 @@ class Bridge:
         if command == "/memory":
             self.memory_command(chat_id, arg)
             return
+        image_data_url = None
+        if photo_sizes:
+            largest = photo_sizes[-1]  # Telegram lists available photo sizes smallest first.
+            file_id = largest.get("file_id") if isinstance(largest, dict) else None
+            if not isinstance(file_id, str) or not file_id:
+                self._send(chat_id, "[error] Telegram photo has no file ID.")
+                return
+            try:
+                image_data_url = self.bot.photo_data_url(file_id)
+            except TelegramError as e:
+                self._send(chat_id, f"[error] Could not fetch photo: {e}")
+                return
+
         api_text, step_limit = None, None
         if command == "/learn":
             api_text, step_limit = learn.build_prompt(arg), LEARN_STEPS
@@ -494,7 +549,8 @@ class Bridge:
         except TelegramError:
             pass
         try:
-            reply = agent.run_turn(text, api_text=api_text, step_limit=step_limit)
+            reply = agent.run_turn(text, api_text=api_text, step_limit=step_limit,
+                                   image_data_url=image_data_url)
         except (provider.ProviderError, SessionBusy) as e:
             self._send(chat_id, f"[error] {e}")
             return

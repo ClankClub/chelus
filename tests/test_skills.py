@@ -94,6 +94,15 @@ class LibraryTests(unittest.TestCase):
         self.assertEqual(fm["long"], "folded text")
         self.assertIn("hermes", fm["metadata"])
 
+    def test_hermes_skill_limit_accepts_100k_and_rejects_one_more(self):
+        prefix = "---\nname: sized\ndescription: Use when testing. Does a thing.\n---\n"
+        exact = prefix + "x" * (skills.MAX_SKILL_CHARS - len(prefix))
+        self.assertEqual(len(exact), 100_000)
+        skills.validate_skill_md(exact, new=True)
+        with self.assertRaisesRegex(skills.SkillError, "limit"):
+            skills.validate_skill_md(exact + "x", new=True)
+        self.assertEqual(tools.TOOLS["skill_view"].max_output, skills.MAX_SUPPORT_FILE_CHARS + 1500)
+
     def test_discover_categories_index_and_truncation(self):
         s = make_settings(Path(self._tmp.name))
         write_skill(s, "alpha", "phone", desc="Use when x. " + "y" * 80)
@@ -142,6 +151,12 @@ class GuardTests(unittest.TestCase):
         notes = skill_guard.lint("A powerful comprehensive skill that does far too many things at once.", "# x\n")
         self.assertEqual(len(notes), 3)
 
+    def test_hermes_soft_limit_warns_only_above_24k_body_chars(self):
+        body = "x" * skill_guard.SOFT_SKILL_BODY_CHARS
+        self.assertFalse(any("SKILL.md body" in note for note in skill_guard.lint("Use when testing.", body)))
+        notes = skill_guard.lint("Use when testing.", body + "x")
+        self.assertTrue(any("24,001" in note and "~200 lines" in note for note in notes))
+
 
 class ManageTests(Base):
     def agent(self, model, approve=lambda req: approval.ONCE, **kw):
@@ -178,7 +193,7 @@ class ManageTests(Base):
         bad = create_args("mixed")
         bad["file_content"] = "oops"
         self.assertIn("put the text in 'content'", self.manage(bad))
-        big = create_args("big", body="# B\n" + "x" * 7000)
+        big = create_args("big", body="# B\n" + "x" * skills.MAX_SKILL_CHARS)
         self.assertIn("references/", self.manage(big))
         self.assertIn("frontmatter", self.manage({"action": "create", "name": "nofm", "purpose": "", "content": "# hi"}))
         self.assertIn("invalid skill name", self.manage(create_args("Bad Name")))
@@ -220,6 +235,26 @@ class ManageTests(Base):
         self.assertIn("removed references/a.md", skill_tools.undo(self.s, self.store, "kit"))
         self.assertFalse(f.exists())
         self.assertIn("nothing to undo", skill_tools.undo(self.s, self.store, "kit"))
+
+    def test_support_files_accept_hermes_size_and_refuse_over_limit(self):
+        write_skill(self.s, "larger")
+        content = "x" * 7000
+        out = self.manage({"action": "write_file", "name": "larger", "purpose": "",
+                           "file_path": "references/large.md", "file_content": content})
+        self.assertTrue(out.startswith("saved: add references/large.md"), out)
+        path = skills.root(self.s) / "larger" / "references" / "large.md"
+        self.assertEqual(path.read_text(encoding="utf-8"), content)
+        replacement = "y" * 7000
+        out = self.manage({"action": "patch", "name": "larger", "purpose": "",
+                           "file_path": "references/large.md", "old_string": content,
+                           "new_string": replacement})
+        self.assertTrue(out.startswith("saved: patch 'larger' references/large.md"), out)
+        self.assertEqual(path.read_text(encoding="utf-8"), replacement)
+        over_limit = "z" * (skills.MAX_SUPPORT_FILE_CHARS + 1)
+        out = self.manage({"action": "write_file", "name": "larger", "purpose": "",
+                           "file_path": "references/over.md", "file_content": over_limit})
+        self.assertIn("100,001 characters", out)
+        self.assertFalse((path.parent / "over.md").exists())
 
     def test_undo_refuses_after_a_hand_edit(self):
         self.manage(create_args("hand"))

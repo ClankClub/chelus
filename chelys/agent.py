@@ -288,13 +288,18 @@ class Agent:
         self._lease: str | None = None
         self._recoveries = 0
         self._compacted = False
+        self._image_data_url: str | None = None
+        self._image_api_content: str | None = None
+        self._image_data_url: str | None = None
+        self._image_api_content: str | None = None
 
     @property
     def reviews(self) -> bool:
         """Whether this conversation feeds the background skill review: owner only."""
         return not self.guest and self.actor == "foreground" and self.s.review_interval > 0
 
-    def run_turn(self, user_text: str, api_text: str | None = None, step_limit: int | None = None) -> str:
+    def run_turn(self, user_text: str, api_text: str | None = None, step_limit: int | None = None,
+                  image_data_url: str | None = None) -> str:
         """Run one user message to a final reply, saving rows as they happen.
 
         api_text, if given, is what the model sees instead of user_text (/learn sends its
@@ -308,6 +313,7 @@ class Agent:
         user_msg = stamp_user_message(user_text, api_text=api_text)  # the turn's clock is frozen here
         self.tools_ok, self.tools_started = [], []
         self._turn_no, self._recoveries = None, 0
+        self._image_data_url = self._image_api_content = None
         self.review_due = self.memory_review_due = False
         self.memory_failures, self.memory_notes = 0, []
         self.step_limit = max(step_limit or 0, self.s.max_iterations)
@@ -320,6 +326,9 @@ class Agent:
             self._compacted = False
             history = self._maybe_compact(history, user_msg)
             self._prepare_prompt(user_msg, refresh=self._compacted)
+            if image_data_url is not None:
+                self._image_data_url = image_data_url
+                self._image_api_content = user_msg.get("api_content")
             self._turn_no = self.store.last_turn(self.session_id) + 1
             self._add(turn, user_msg)
             reply = self._loop(history, turn)
@@ -333,6 +342,7 @@ class Agent:
             self._close_turn(turn, user_msg, f"failed: {e}")
             raise
         finally:
+            self._image_data_url = self._image_api_content = None
             self._lease = None
             try:
                 self.store.release_lease(self.session_id, holder)
@@ -597,7 +607,21 @@ class Agent:
         return self._end(turn, text or EMPTY_SUMMARY)
 
     def _call(self, msgs: list[dict[str, Any]], schemas: list, max_tokens: int | None) -> dict[str, Any]:
-        messages = [{"role": "system", "content": self.system}] + recent_window(msgs, self.s.history_chars)
+        window = recent_window(msgs, self.s.history_chars)
+        if self._image_data_url is not None and self._image_api_content is not None:
+            for i in range(len(window) - 1, -1, -1):
+                row = window[i]
+                if row.get("role") == "user" and row.get("api_content") == self._image_api_content:
+                    row = dict(row)  # Keep the stored conversation text-only.
+                    row["api_content"] = [
+                        {"type": "text", "text": self._image_api_content},
+                        {"type": "image_url", "image_url": {"url": self._image_data_url}},
+                    ]
+                    window[i] = row
+                    break
+            else:
+                raise provider.ProviderError("Photo message is missing from model context")
+        messages = [{"role": "system", "content": self.system}] + window
         while True:
             self._renew()
             try:
