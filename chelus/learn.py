@@ -1,7 +1,7 @@
 """/learn: one prompt that turns what the owner points at (files, "what we just did",
 pasted notes) into a skill, run as an ordinary turn.
 
-Rebuilt from Hermes Agent's learn_prompt.py (Nous Research, MIT) for Chelys's tools and the
+Rebuilt from Hermes Agent's learn_prompt.py (Nous Research, MIT) for Chelus's tools and the
 phone's size limits. The source-hygiene block is kept in full: it is Hermes's answer to
 text from a source turning into instructions the skill then carries.
 """
@@ -28,7 +28,7 @@ Frontmatter (between two '---' lines at the top of SKILL.md):
   shows only 60 characters, so anything longer never helps you find it. Count the
   characters before saving. Good: 'Use when the owner asks to back up photos.' (43)
 - version: 0.1.0
-- author: Chelys. Never the owner's name or any account name you can see.
+- author: Chelus. Never the owner's name or any account name you can see.
 
 Body, in this order (leave out a section only if it has nothing to say):
 1. '# <Title>', then 2-3 sentences: what it does and what it doesn't.

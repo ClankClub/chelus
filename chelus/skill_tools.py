@@ -341,7 +341,7 @@ def pending_card(rec: dict[str, Any], s: Any) -> str:
     except SkillError as e:
         detail = f"(would fail now: {e})"
     return (f"Skill change {rec['id']} proposed by the background review\n{rec['gist']}\n"
-            f"Why (Chelys's words): {purpose or '(no reason given)'}\n\n{detail}")
+            f"Why (Chelus's words): {purpose or '(no reason given)'}\n\n{detail}")
 
 
 def undo(s: Any, store: Any, name: str) -> str:

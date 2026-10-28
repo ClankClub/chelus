@@ -1,6 +1,6 @@
 # Project status
 
-Updated **2026-10-26**. This is a current-state summary, not a release announcement. Chelus is running on the owner's Samsung Galaxy A10e (Android 11, **32-bit Termux**) and is **pre-1.0**. Its core runs on Python's standard library without pip dependencies; model inference is remote.
+Updated **2026-10-28**. This is a current-state summary, not a release announcement. Chelus is running on the owner's Samsung Galaxy A10e (Android 11, **32-bit Termux**) and is **pre-1.0**. Its core runs on Python's standard library without pip dependencies; model inference is remote.
 
 **Important source/deployment distinction:** The live phone installation is ahead of the source currently checked into GitHub. Capabilities below marked *owner-confirmed live* describe that configured machine; they should not be read as a promise that a fresh clone includes every integration. Setup remains in [README.md](../README.md), and this page remains the status source of truth.
 
@@ -35,7 +35,7 @@ Mocked tests establish behavior of the checked-in code, **not** production relia
 - **Scheduling/cron:** base scheduling integration is still planned/in progress. Do not describe recurring unattended jobs as a completed built-in subsystem.
 - **Unattended resilience:** Android process survival, extended background operation, reliable missed-wake recovery, and automatic restart after a reboot still need explicit end-to-end verification.
 - **Specific Telegram flows:** end-to-end approval-button interactions, newer skills flows, and memory-review/pending cards remain not independently verified in the live bridge.
-- **Release parity:** bring the latest on-phone code/integration setup back into this repository and document optional installation steps before presenting these external capabilities as reproducible from a fresh checkout.
+- **Release parity:** the on-phone code (tool approvals, Telegram photos, skill size limits) is back in this repository as of 2026-10-28. Integration setup (AgentMail, Vercel, MEGA, ADB) still lives only on the phone and is not documented here.
 - **Portability:** the Galaxy A10e/32-bit Termux is the demonstrated platform. Additional hardware/OS support should be claimed only after testing.
 
 Run the source test suite with `python -m unittest discover -s tests -t .`. Report separately what passed in desktop mocks, tests executed on the phone, and actual live network/device use. Avoid converting either self-reported field results or mocked tests into stronger guarantees than they support.
@@ -43,3 +43,7 @@ Run the source test suite with `python -m unittest discover -s tests -t .`. Repo
 ## Audit fixes (merged 2026-10-28)
 
 Seven 2026-10-24 audit findings are fixed: Telegram batch tails, session ownership during slow retries, executable launcher and canonical install URL, bounded shell output, staged deployment with true test status, provider response validation, and guest listing metadata filtering. Covered by mocked tests; not yet run on the phone.
+
+## Consolidation and rename (2026-10-28)
+
+`main` now joins three lines that had diverged: the GitHub docs, the audit fixes, and the code the phone was running, which had never been committed (Hermes's tool-approvals work plus edits made on the phone). The package, scripts and folders are renamed Chelys to Chelus; existing installs migrate their config and data folders on first start (see the README). Tests pass on the phone in a scratch copy; the migration has not yet run on the live install.

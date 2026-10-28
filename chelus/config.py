@@ -8,12 +8,37 @@ from dataclasses import dataclass, field, fields
 from pathlib import Path
 
 
+def _migrate(old: Path, new: Path) -> Path:
+    """The project was called Chelys. Move a Chelys-era folder to its Chelus name once and
+    leave a symlink behind, so skills and scripts that name the old path keep working.
+    If the move can't happen, keep using the old folder rather than starting empty."""
+    if new.exists() or not old.is_dir() or old.is_symlink():
+        return new if new.exists() or not old.is_dir() else old
+    try:
+        new.parent.mkdir(parents=True, exist_ok=True)
+        os.rename(old, new)
+    except OSError:
+        return new if new.exists() else old  # another process won the race, or a cross-device move
+    try:
+        old.symlink_to(new, target_is_directory=True)
+    except OSError:
+        pass
+    return new
+
+
+def _dir(env: str, parent: Path) -> Path:
+    for name in (f"CHELUS_{env}", f"CHELYS_{env}"):  # the old variable still works
+        if os.environ.get(name):
+            return Path(os.environ[name])
+    return _migrate(parent / "chelys", parent / "chelus")
+
+
 def _config_dir() -> Path:
-    return Path(os.environ.get("CHELYS_CONFIG_DIR", Path.home() / ".config" / "chelys"))
+    return _dir("CONFIG_DIR", Path.home() / ".config")
 
 
 def _data_dir() -> Path:
-    return Path(os.environ.get("CHELYS_DATA_DIR", Path.home() / ".local" / "share" / "chelys"))
+    return _dir("DATA_DIR", Path.home() / ".local" / "share")
 
 
 @dataclass
@@ -54,7 +79,7 @@ class Settings:
     # archived after 30 (Hermes's curator, without its LLM pass).
     curator: bool = True
     # Memory (owner only): two small files of facts in every conversation's prompt, written
-    # by Chelys without asking (Hermes's default; the reply shows each write). Limits are in
+    # by Chelus without asking (Hermes's default; the reply shows each write). Limits are in
     # characters (Hermes: 2,200 and 1,375). The memory review runs after this many owner
     # messages (Hermes: 10); 0 turns it off.
     memory: bool = True

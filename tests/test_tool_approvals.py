@@ -4,9 +4,9 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from chelys import approval, cli, telegram, tools
-from chelys.agent import Agent
-from chelys.store import Store
+from chelus import approval, cli, telegram, tools
+from chelus.agent import Agent
+from chelus.store import Store
 from tests.test_agent import Base, make_settings
 
 

@@ -50,7 +50,7 @@ class Request(str):
     def card(self) -> str:
         """The prompt as plain text, facts first."""
         lines = [self.title]
-        lines.append(f"Why (Chelys's words): {self.purpose}" if self.purpose else "Why: (no reason given)")
+        lines.append(f"Why (Chelus's words): {self.purpose}" if self.purpose else "Why: (no reason given)")
         if self.detail:
             lines += ["", self.detail]
         return "\n".join(lines)
@@ -82,4 +82,4 @@ def manage(store, text: str = "") -> str:
         if 0 < grant_id < 2**63:
             return (f"Revoked approval #{grant_id}." if store.revoke_tool(grant_id)
                     else "No such ordinary tool approval.")
-    return "Usage: /approvals [revoke ID|clear] (CLI: chelys approvals [revoke ID|clear])"
+    return "Usage: /approvals [revoke ID|clear] (CLI: chelus approvals [revoke ID|clear])"

@@ -3,7 +3,7 @@ conversation, and the `memory` tool that edits them.
 
 Rebuilt from Hermes Agent's memory_tool.py and memory_tool_store.py (Nous Research, MIT);
 reading notes in docs/hermes/memory.md. As in Hermes:
-- MEMORY.md (Chelys's notes on the phone and setup) and USER.md (who the owner is), entries
+- MEMORY.md (Chelus's notes on the phone and setup) and USER.md (who the owner is), entries
   separated by a line holding only `§`, with hard character budgets (2,200 and 1,375) that
   count the joined text and are checked only on writes;
 - add, patch and remove, plus an atomic batch whose budget is checked only on the final
@@ -518,7 +518,7 @@ def owner_view(s: Any) -> str:
         lines.append(f"{NAMES[target].capitalize()} ({_usage(s, target, entries)}):")
         lines += [f"{n}. {e}" for n, e in enumerate(entries, 1)] or ["(empty)"]
         lines.append("")
-    lines.append(f"Files: {root(s)} (editable by hand). Changes reach Chelys's instructions at the next "
+    lines.append(f"Files: {root(s)} (editable by hand). Changes reach Chelus's instructions at the next "
                  "conversation or history summary.")
     return "\n".join(lines)
 

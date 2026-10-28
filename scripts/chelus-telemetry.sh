@@ -1,11 +1,11 @@
 #!/system/bin/sh
-# Read-only CPU telemetry bridge for Chelys. Started by an authorized ADB shell.
+# Read-only CPU telemetry bridge for Chelus. Started by an authorized ADB shell.
 # No agent commands are accepted. Nothing touches app secrets or conversations.
 # This is per-boot only; it does not install an Android service.
 set -u
 PATH=/system/bin:/system/xbin
-out=/data/local/tmp/chelys-telemetry.json
-pidfile=/data/local/tmp/chelys-telemetry.pid
+out=/data/local/tmp/chelus-telemetry.json
+pidfile=/data/local/tmp/chelus-telemetry.pid
 umask 022
 if [ -r "$pidfile" ]; then
     read -r oldpid < "$pidfile"

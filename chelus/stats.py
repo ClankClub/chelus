@@ -7,7 +7,7 @@ import os
 import tempfile
 import time
 
-CPU_CACHE_PATH = Path("/data/local/tmp/chelys-telemetry.json")
+CPU_CACHE_PATH = Path("/data/local/tmp/chelus-telemetry.json")
 DEFAULT_FIELDS = ("mem", "cpu", "bat")
 ALLOWED_FIELDS = DEFAULT_FIELDS + ("swap", "up", "disk")
 

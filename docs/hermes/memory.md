@@ -40,7 +40,7 @@ Skipped, and why:
 - `agent/insights.py` (610): usage analytics for `/insights`, not memory. Checked by grep, not read in full.
 - `evals/session_search_schema/`: Hermes's own evaluation of the tool schema.
 - The `/journey` timeline and the `zh-Hans` docs.
-- `hermes_state_search.py`: only the FTS query signature was read. Chelys has its own store.
+- `hermes_state_search.py`: only the FTS query signature was read. Chelus has its own store.
 
 ## The built-in store
 
@@ -156,7 +156,7 @@ memory:
 
 Turning both stores off removes the tool and its guidance. With one off, the schema lists only the other target.
 
-## Chelys today (2026-10-24)
+## Chelus today (2026-10-24)
 
 - **No cross-conversation memory at all.** History is per conversation, and compaction summarizes within one.
 - **The parts memory would reuse already exist.** These are the skills pattern of a frozen prompt section stored on the session row and refreshed at compaction (`Agent._prepare_skills`), `skill_guard.scan`, the background review with pending cards and buttons, and the owner and guest split.
@@ -165,9 +165,9 @@ Turning both stores off removes the tool and its guidance. With one off, the sch
 
 ## Port list (proposed, for agreement)
 
-1. **Store and `memory` tool.** Port `MEMORY.md` and `USER.md` under `~/.local/share/chelys/memories/`, `§` entries, char budgets 2,200 and 1,375. Bring add, patch and remove, the batch with a final-budget check, the three-step matching with folding, the error shapes (closest entries, terminal success, no echo on a failed batch), and the 3-failure cap per turn. Also the scan via `skill_guard`, the drift and unreadable-file refusals, fcntl locking and atomic writes. Keep the files hand-editable. Drop `replace` from the start. Owner only: guests get no tool and no memory in their prompt, since `USER.md` is the owner's profile.
+1. **Store and `memory` tool.** Port `MEMORY.md` and `USER.md` under `~/.local/share/chelus/memories/`, `§` entries, char budgets 2,200 and 1,375. Bring add, patch and remove, the batch with a final-budget check, the three-step matching with folding, the error shapes (closest entries, terminal success, no echo on a failed batch), and the 3-failure cap per turn. Also the scan via `skill_guard`, the drift and unreadable-file refusals, fcntl locking and atomic writes. Keep the files hand-editable. Drop `replace` from the start. Owner only: guests get no tool and no memory in their prompt, since `USER.md` is the owner's profile.
 2. **Prompt.** Render both blocks from a snapshot frozen on the session row, the same way as the skills index, refreshed when compaction runs. Add the guidance paragraph with the declarative-facts rule and the "memory describes the user, not this phone" line. Owner prompt only.
-3. **Commands.** Add `/memory` in Telegram and `chelys memory` in the CLI: show both stores with usage, and pending changes. On Telegram, a one-line notice when Chelys saves something, so a claimed save that never happened is visible.
+3. **Commands.** Add `/memory` in Telegram and `chelus memory` in the CLI: show both stores with usage, and pending changes. On Telegram, a one-line notice when Chelus saves something, so a claimed save that never happened is visible.
 4. **Review.** Add memory to `review.py`: a user-turn counter (10), the combined prompt when both are due, `add` applied directly, `patch` and `remove` staged as pending cards pinned to the exact entry, through the same Approve and Reject buttons as skills.
 5. **`session_search`.** An FTS5 table over the text of user and assistant rows, kept in sync on insert, with discovery and scroll shapes, compacted rows searchable, and live rows of the current conversation excluded. Owner only. It costs nothing in the prompt and is the only recall for anything older than the live window.
 

@@ -2,7 +2,7 @@
 progress, warn it, and (when hard stops are on) stop the turn.
 
 Rebuilt from Hermes Agent's agent/tool_guardrails.py (Nous Research, MIT) with the same
-detectors and thresholds, minus the parts for tools Chelys doesn't have (web search caps,
+detectors and thresholds, minus the parts for tools Chelus doesn't have (web search caps,
 subagent caps, pollers, spill files):
 
 - exact failure: the same call (tool + canonical args) failing again. Warn at 2, block at 5.

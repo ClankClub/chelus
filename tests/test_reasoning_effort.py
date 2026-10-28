@@ -5,8 +5,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from chelys.config import ConfigError, Settings, load_settings
-from chelys.provider import build_payload
+from chelus.config import ConfigError, Settings, load_settings
+from chelus.provider import build_payload
 
 
 class ReasoningEffortTests(unittest.TestCase):
@@ -29,7 +29,7 @@ class ReasoningEffortTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory)
             (path / "config.toml").write_text('thinking = true\nreasoning_effort = "banana"\n')
-            with patch.dict(os.environ, {"CHELYS_CONFIG_DIR": str(path)}):
+            with patch.dict(os.environ, {"CHELUS_CONFIG_DIR": str(path)}):
                 with self.assertRaisesRegex(ConfigError, "reasoning_effort"):
                     load_settings()
 
@@ -37,7 +37,7 @@ class ReasoningEffortTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory)
             (path / "config.toml").write_text('thinking = true\nreasoning_effort = "low"\n')
-            with patch.dict(os.environ, {"CHELYS_CONFIG_DIR": str(path)}):
+            with patch.dict(os.environ, {"CHELUS_CONFIG_DIR": str(path)}):
                 settings = load_settings()
             self.assertTrue(settings.thinking)
             self.assertEqual(settings.reasoning_effort, "low")

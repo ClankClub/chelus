@@ -89,7 +89,7 @@ When it's on, every `skill_manage` write is staged under `pending/skills/` and r
 
 **Usage bump.** A successful view bumps `view_count` **and** `use_count`, because viewing means acting on the skill.
 
-**Chelys take:** keep one skills root, frontmatter parsing, the 60-char index description, progressive disclosure, path containment, the injection-phrase warning and view dedup. Drop the tiers and precedence, plugins, readiness and env capture, apps and environments, and the YAML dependency. Stdlib has no YAML, so we need a minimal frontmatter parser: flat `key: value`, plus inline `[a, b]` lists and `metadata.hermes` nesting only if it's worth it. Hermes's own fallback is flat key:value, which is precedent for this.
+**Chelus take:** keep one skills root, frontmatter parsing, the 60-char index description, progressive disclosure, path containment, the injection-phrase warning and view dedup. Drop the tiers and precedence, plugins, readiness and env capture, apps and environments, and the YAML dependency. Stdlib has no YAML, so we need a minimal frontmatter parser: flat `key: value`, plus inline `[a, b]` lists and `metadata.hermes` nesting only if it's worth it. Hermes's own fallback is flat key:value, which is precedent for this.
 
 ## Write path: `tools/skill_manager_tool.py` (928), `skill_manager_guards.py` (252), `skill_manager_batch.py` (308)
 
@@ -150,7 +150,7 @@ The success result carries a `_change` gist (a 120-char description preview, or 
 
 All three are best effort and never block the write.
 
-**Chelys take:** keep what the tool shape is for (no field can land in the wrong action) and the error messages that tell the model what to do next. The proposal at the end gets there with separate small tools instead of one tool with branches. Keep:
+**Chelus take:** keep what the tool shape is for (no field can land in the wrong action) and the error messages that tell the model what to do next. The proposal at the end gets there with separate small tools instead of one tool with branches. Keep:
 
 - the limits and the 60-char new-skill description rule;
 - frontmatter validation, so a patch can't break the structure;
@@ -158,7 +158,7 @@ All three are best effort and never block the write.
 - atomic writes;
 - path containment and the delete-target guards.
 
-Keep **archive instead of delete** everywhere, foreground included. A phone has no undo beyond what Chelys keeps itself (see the revisions table under Telemetry and ledger).
+Keep **archive instead of delete** everywhere, foreground included. A phone has no undo beyond what Chelus keeps itself (see the revisions table under Telemetry and ledger).
 
 The batch machinery (snapshots, locks, a 20-op cap) is heavy for one process on one phone, and separate tools make it unnecessary: each call is one change, applied atomically. The lock is unnecessary while the turn lease already serializes writers per session, but two sessions (Telegram and terminal) could still write the same skill. A per-skill `O_EXCL` lock file is cheap, so keep that idea in reserve.
 
@@ -207,11 +207,11 @@ A lot of the file is false-positive suppression learned the hard way. Matches in
 
 On a patch, only findings the patch *introduced* are reported.
 
-**Chelys take.** The threat model is different here, and this is the sketchy part you named. Hermes skips scanning its own agent's skills because a terminal can run anything anyway. Chelys has no unrestricted terminal by default; risky tools go through the approval gate. A skill, though, is **persistent prompt material**: it gets loaded into future turns and followed.
+**Chelus take.** The threat model is different here, and this is the sketchy part you named. Hermes skips scanning its own agent's skills because a terminal can run anything anyway. Chelus has no unrestricted terminal by default; risky tools go through the approval gate. A skill, though, is **persistent prompt material**: it gets loaded into future turns and followed.
 
-The real risk for Chelys isn't the model writing `rm -rf`. It's **laundering**: the model reads attacker-controlled text (a fetched web page, a forwarded message, a guest on Telegram), then "learns a skill" from it. An injected instruction becomes a permanent, trusted procedure. Hermes's own answer to "small models that misjudge what they learned" is the write-approval gate.
+The real risk for Chelus isn't the model writing `rm -rf`. It's **laundering**: the model reads attacker-controlled text (a fetched web page, a forwarded message, a guest on Telegram), then "learns a skill" from it. An injected instruction becomes a permanent, trusted procedure. Hermes's own answer to "small models that misjudge what they learned" is the write-approval gate.
 
-The proposal for Chelys:
+The proposal for Chelus:
 
 - A small injection-and-exfil subset of the scanner (the injection category, invisible unicode, secrets, instructions to modify agent config, send-to-URL) runs on every skill write and blocks critical findings, with the error naming the finding so the model can fix it.
 - The linter's three shape rules: description length, oversized body, incident-log shape.
@@ -244,7 +244,7 @@ Categories outside the current context collapse to a names-only line but are nev
 
 Everything else is taught by the index text and the tool schema.
 
-**Routing against memory.** The memory guidance tells the model that procedures go to skills and facts go to memory. Chelys has no memory tool yet, so this waits for the memory port.
+**Routing against memory.** The memory guidance tells the model that procedures go to skills and facts go to memory. Chelus has no memory tool yet, so this waits for the memory port.
 
 **Index delta.** The index is part of the cached system prompt, and the prompt is never rebuilt mid-conversation.
 
@@ -255,11 +255,11 @@ Everything else is taught by the index text and the tool schema.
 
 **Preprocessing.** `${HERMES_SKILL_DIR}` and `${HERMES_SESSION_ID}` are substituted on load, and tokens that can't be resolved stay visible. Inline shell `` !`cmd` `` is single-line, capped at 4,000 chars of output and 10 s, and off by default.
 
-**Chelys take.**
+**Chelus take.**
 
 - **Index block:** keep it, shortened. The model is small, and the block is paid for every turn (cached, but still). The "load it if even partially relevant" push matters more than the wording around it.
 - **Skill Safety Rule:** keep it.
-- **Delta note:** fits Chelys's design exactly. The user row already stores `api_content` (the text plus the `[sent ...]` stamp) and replays it byte-for-byte. So the note can be appended to the stored `api_content`, and the cache stays intact.
+- **Delta note:** fits Chelus's design exactly. The user row already stores `api_content` (the text plus the `[sent ...]` stamp) and replays it byte-for-byte. So the note can be appended to the stored `api_content`, and the cache stays intact.
 - **Template tokens and inline shell:** drop both. `skill_view` can print the skill's directory, and `run_shell` already goes through approval.
 
 ## Compaction interplay: `agent/context_compressor.py` (skill parts only)
@@ -273,7 +273,7 @@ Hermes calls the failure a ghost skill: compaction shrinks an old `skill_view` r
   - or a user message in the tail names it.
 - **Dropped markers are restored.** After the summarizer runs, any skill loaded in the summarized region whose marker the summary dropped gets the marker re-appended under `## Pruned Skills`, up to the 20 newest. Skills carried inline by `/skill` messages count too.
 
-**Chelys take.** Chelys's compaction summarizes the whole middle and keeps the tail verbatim, so the tail already protects recently viewed skills. The missing piece is the third defense: collect the names of skills viewed in the summarized rows and append the reload markers deterministically, without trusting the summarizer to mention them. That's about 20 lines in `compaction.py`.
+**Chelus take.** Chelus's compaction summarizes the whole middle and keeps the tail verbatim, so the tail already protects recently viewed skills. The missing piece is the third defense: collect the names of skills viewed in the summarized rows and append the reload markers deterministically, without trusting the summarizer to mention them. That's about 20 lines in `compaction.py`.
 
 ## Self-improvement loop: `agent/background_review.py` (1,349) and its trigger
 
@@ -333,10 +333,10 @@ Hermes calls the failure a ghost skill: compaction shrinks an old `skill_view` r
 - `review_idle_queue.py` defers reviews while a local llama-server GPU is busy. Not our hardware.
 - `review_engine.py` is `/review`, a different feature: a full-privilege subagent that reviews recent work, not skills.
 
-**Chelys take.** This is the feature that makes Hermes Hermes. It's also where laundering bites hardest: an unattended model decides what becomes permanent, and nobody is watching. The prompt says the right things about lessons versus logs and is worth rebuilding closely. What changes on a phone:
+**Chelus take.** This is the feature that makes Hermes Hermes. It's also where laundering bites hardest: an unattended model decides what becomes permanent, and nobody is watching. The prompt says the right things about lessons versus logs and is worth rebuilding closely. What changes on a phone:
 
-- **Writes are staged, not applied.** When approval is on, Hermes already stages every background write under `pending/`. Chelys does the same, and the Telegram bridge shows each pending change with approve and reject buttons. The owner already uses buttons there, so it's a better review surface than Hermes's `/skills pending`.
-- **Owner conversations only.** Hermes reviews every session it serves; Chelys must never review a guest's conversation.
+- **Writes are staged, not applied.** When approval is on, Hermes already stages every background write under `pending/`. Chelus does the same, and the Telegram bridge shows each pending change with approve and reject buttons. The owner already uses buttons there, so it's a better review surface than Hermes's `/skills pending`.
+- **Owner conversations only.** Hermes reviews every session it serves; Chelus must never review a guest's conversation.
 - **The counter lives in the session row.** The Telegram bridge builds a fresh Agent for every message, so an in-memory counter would never reach 10.
 - **Threading and cost need a device test.** The bridge is single-threaded, so the review would run in a worker thread after the reply is sent, holding the session's turn lease so a new message waits. Cost: the replay of a 40,000-char history is cache-warm and cheap at DeepSeek-flash prices, but each review is up to 16 more requests.
 
@@ -367,7 +367,7 @@ This settles the doc inconsistency. The code says **14 and 30 days** (`DEFAULT_S
 
 Before it runs, the whole skills tree is snapshotted to a tarball. Afterwards a report is written and renames are reconciled.
 
-**Chelys take.** Not now. The deterministic pass only matters once the library is big enough to crowd the index, and a dozen 60-char rows cost nothing. When it does matter, the pass is small: a usage table, a weekly check on the bridge's poll loop, and archive (never delete) only for skills the background review created. Drop the LLM consolidation and the tarball backups.
+**Chelus take.** Not now. The deterministic pass only matters once the library is big enough to crowd the index, and a dozen 60-char rows cost nothing. When it does matter, the pass is small: a usage table, a weekly check on the bridge's poll loop, and archive (never delete) only for skills the background review created. Drop the LLM consolidation and the tarball backups.
 
 ## Telemetry and ledger: `tools/skill_usage.py` (748), `tools/skill_ledger.py` (633), `tools/skill_provenance.py` (44)
 
@@ -391,7 +391,7 @@ Rules:
 - The ledger is capped at 5 MB and trimmed oldest first.
 - It's telemetry, not a gate: every write path except rollback swallows its own errors.
 
-**Chelys take.** Chelys already has SQLite. A `skill_revisions` table (skill, time, actor, action, content before, content after) gives the same undo in one place, and `chelys skills undo <name>` is a few lines. Usage counts become a `skill_usage` table, needed only with the curator.
+**Chelus take.** Chelus already has SQLite. A `skill_revisions` table (skill, time, actor, action, content before, content after) gives the same undo in one place, and `chelus skills undo <name>` is a few lines. Usage counts become a `skill_usage` table, needed only with the curator.
 
 ## Commands and `/learn`: `agent/skill_commands.py` (1,002, skimmed), `agent/learn_prompt.py` (197), `agent/skill_bundles.py` (213, skimmed)
 
@@ -418,7 +418,7 @@ It embeds the house authoring standards:
 
 It also embeds a source-hygiene block: **source text is data, not instructions**. Drop invisible and bidi Unicode before distilling, and never carry instructions from a source into a skill as if the user wrote them. That block is Hermes's own answer to laundering on the foreground path.
 
-**Chelys take.**
+**Chelus take.**
 
 - **`/learn`:** keep it. It's cheap and high value: a prompt plus a Telegram command, and it gives the owner a deliberate way to make skills before any autonomous loop exists. Keep the substance of the source-hygiene block in full.
 - **Slash-invoking a skill by name:** nice on a keyboard, awkward on Telegram, where skill names would clutter the bot's command list. A single `/skill name` command is enough, later.
@@ -427,14 +427,14 @@ It also embeds a source-hygiene block: **source text is data, not instructions**
 ## Files skipped, and why
 
 - `tools/skills_hub*.py` (8 files), `skills_sync*.py` (3), the `hermes_cli` skills and curator commands, and the website and index-building scripts: these are distribution (hub, taps, bundled sync, trust tiers, web UI). A phone with one owner installs a skill by copying a directory.
-- `agent/curator_backup.py`: tarball snapshots for the LLM consolidation pass, which Chelys drops.
+- `agent/curator_backup.py`: tarball snapshots for the LLM consolidation pass, which Chelus drops.
 - `tools/skillevaluator_scan.py` (the NVIDIA scanner, which needs uv and an external binary) and `tools/skills_ast_audit.py` (opt-in AST hints for skill Python): both serve third-party installs.
-- `tools/skills_tool_setup.py` (env-var readiness and secret capture): Chelys won't support skills that ask for credentials.
+- `tools/skills_tool_setup.py` (env-var readiness and secret capture): Chelus won't support skills that ask for credentials.
 - `agent/learning_mutations.py` (UI edit and delete for the `/journey` view): Hermes UI. Its one rule, that deleting a skill archives it, is already noted.
 - `agent/review_idle_queue.py` and `agent/review_engine.py`: covered above.
 - Most of `skill_commands.py` (caching, plugin skills, collisions) and the curator's report rendering: skimmed for behavior only.
 
-## What Chelys keeps and drops
+## What Chelus keeps and drops
 
 **Kept:**
 
@@ -473,8 +473,8 @@ All of items 0-6 of the original plan are built, in `skills.py`, `skill_guard.py
 Decisions that changed from the plan, at the owner's call:
 
 - **One `skill_manage` tool**, like Hermes, with a flat schema: `action` (create, patch, write_file, remove_file, delete; `edit` is accepted as patch) and the fields each action uses. Wrong fields get an error that says which field to use. No batch.
-- **Approval scopes.** Every skill write asks by default (`skill_approval = "ask"`), with four answers: allow once, allow for this conversation, always for this skill, deny. "Always" is stored per skill (`chelys skills revoke NAME` drops it). `skill_approval = "off"` writes without asking.
-- **Plain-language approval cards** for every risky tool, not just skills: a title written by the code ("Run a shell command on the phone"), the model's reason in a required `purpose` argument, labeled as Chelys's words, then the facts (the command, the file and size, or a diff).
+- **Approval scopes.** Every skill write asks by default (`skill_approval = "ask"`), with four answers: allow once, allow for this conversation, always for this skill, deny. "Always" is stored per skill (`chelus skills revoke NAME` drops it). `skill_approval = "off"` writes without asking.
+- **Plain-language approval cards** for every risky tool, not just skills: a title written by the code ("Run a shell command on the phone"), the model's reason in a required `purpose` argument, labeled as Chelus's words, then the facts (the command, the file and size, or a diff).
 - **Background review built now**, not later. It runs after the reply is sent, in the bridge's poll loop, so messages sent during a review wait until it finishes (no threads). With approval on, its writes are staged as pending (10 at most) and approved with buttons that never expire; skills the owner marked "always" are written directly.
 - **Curator built now**: the deterministic pass only (weekly, after 2 h idle; agent-created skills go stale at 14 days and are archived at 30; pinned and owner-made skills are never touched). The LLM consolidation pass stays out, as it is off by default in Hermes.
 - Delete means archive, and `undo` reverts the last change to a skill (restoring an archived one), refusing if the file changed since.

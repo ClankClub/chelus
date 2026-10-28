@@ -11,13 +11,14 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
-from chelys import agent as agent_mod
-from chelys import guardrails, provider, tools
-from chelys.config import ConfigError, Settings, load_api_key, load_settings
-from chelys.repetition import is_repetition_dominated
-from chelys.store import Store, recent_window
+from chelus import agent as agent_mod
+from chelus import guardrails, provider, tools
+from chelus.config import ConfigError, Settings, load_api_key, load_settings
+from chelus.repetition import is_repetition_dominated
+from chelus.store import Store, recent_window
 
 
 def make_settings(tmp: Path, **kw) -> Settings:
@@ -641,8 +642,7 @@ class ConfigTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             cfg = Path(d)
             (cfg / "config.toml").write_text('model = "deepseek-v4-pro"\nrequest_timeout = 30\n', encoding="utf-8")
-            os.environ["CHELYS_CONFIG_DIR"] = str(cfg)
-            try:
+            with patch.dict(os.environ, {"CHELUS_CONFIG_DIR": str(cfg)}):
                 s = load_settings()
                 self.assertEqual(s.model, "deepseek-v4-pro")
                 self.assertEqual(s.request_timeout, 30.0)
@@ -652,8 +652,6 @@ class ConfigTests(unittest.TestCase):
                 (cfg / "config.toml").write_text('bogus = 1\n', encoding="utf-8")
                 with self.assertRaises(ConfigError):
                     load_settings()
-            finally:
-                del os.environ["CHELYS_CONFIG_DIR"]
 
 
 @unittest.skipUnless(os.name == "posix", "shell tool needs a POSIX shell")

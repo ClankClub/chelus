@@ -1,6 +1,6 @@
-# Chelys: agent instructions
+# Chelus: agent instructions
 
-Chelys is a Python standard-library-only AI agent for 32-bit Android/Termux, inspired by Hermes Agent. Setup and usage: [README.md](README.md). Verified state and gaps: [docs/STATUS.md](docs/STATUS.md). Hermes attribution: [NOTICE](NOTICE).
+Chelus is a Python standard-library-only AI agent for 32-bit Android/Termux, inspired by Hermes Agent. Setup and usage: [README.md](README.md). Verified state and gaps: [docs/STATUS.md](docs/STATUS.md). Hermes attribution: [NOTICE](NOTICE).
 
 ## Constraints
 
@@ -19,6 +19,6 @@ Chelys is a Python standard-library-only AI agent for 32-bit Android/Termux, ins
 - `skills.py`, `skill_tools.py`, `skill_guard.py`, `learn.py`, `review.py`, `curator.py`: skills, scanning, background review and archival.
 - `memory.py`, `session_search.py`: MEMORY/USER stores and FTS5 history search.
 - `cli.py`, `telegram.py`, `stats.py`: user interfaces and optional telemetry.
-- All modules above are under `chelys/`. Tests live in `tests/`; `scripts/deploy.sh` stages and tests on the phone before installing.
+- All modules above are under `chelus/`. Tests live in `tests/`; `scripts/deploy.sh` stages and tests on the phone before installing.
 
 Run `python -m unittest discover -s tests -t .` after code changes. Keep setup details in the README and evolving verification in `docs/STATUS.md`, not here.

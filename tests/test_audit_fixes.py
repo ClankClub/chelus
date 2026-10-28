@@ -13,7 +13,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from chelys import provider, tools
+from chelus import provider, tools
 from tests.test_agent import make_settings, tool_call
 
 
@@ -76,7 +76,7 @@ class ShellBoundsTests(unittest.TestCase):
         def exited(proc):
             kill(proc)
             proc.returncode = 0
-        with patch("chelys.tools._kill_group", side_effect=exited):
+        with patch("chelus.tools._kill_group", side_effect=exited):
             out = self.run_shell("import os; os.write(1,b'x'*1000000)")
         self.assertFalse(out.startswith("exit code 0"))
         self.assertIn("output exceeded", out)
@@ -94,7 +94,7 @@ class ProviderValidationTests(unittest.TestCase):
         response.read1 = response.read
         with tempfile.TemporaryDirectory() as d:
             s = make_settings(Path(d), api_max_retries=retries)
-            with patch("chelys.provider.urllib.request.urlopen", return_value=response):
+            with patch("chelus.provider.urllib.request.urlopen", return_value=response):
                 return provider.chat(s, "dummy-key", [], [])
 
     def test_malformed_message_and_tool_shapes_raise_provider_error(self):
@@ -128,7 +128,7 @@ class ProviderValidationTests(unittest.TestCase):
                    io.BytesIO(b'{"choices":[{"message":{"content":"recovered"}}]}')]
         with tempfile.TemporaryDirectory() as d:
             s = make_settings(Path(d), api_max_retries=1)
-            with patch("chelys.provider.urllib.request.urlopen", side_effect=replies):
+            with patch("chelus.provider.urllib.request.urlopen", side_effect=replies):
                 result = provider.chat(s, "dummy", [], [], sleep=lambda seconds: None)
         self.assertEqual(result["content"], "recovered")
 
@@ -138,7 +138,7 @@ class ProviderValidationTests(unittest.TestCase):
                    io.BytesIO(b'{"choices":[{"message":{"content":"recovered"}}]}')]
         with tempfile.TemporaryDirectory() as d:
             s = make_settings(Path(d), api_max_retries=1)
-            with patch("chelys.provider.urllib.request.urlopen", side_effect=replies):
+            with patch("chelus.provider.urllib.request.urlopen", side_effect=replies):
                 result = provider.chat(s, "dummy", [], [], sleep=lambda seconds: None)
         self.assertEqual(result["content"], "recovered")
 
@@ -155,13 +155,13 @@ class DeployTests(unittest.TestCase):
             (bin_dir / "python").write_text(f'#!/bin/sh\nprintf "fake test output\\n"\nexit {test_status}\n')
             for p in bin_dir.iterdir():
                 p.chmod(0o755)
-            install = root / "chelys"
+            install = root / "chelus"
             install.mkdir()
-            (install / "chelys.sh").write_text("previous version")
+            (install / "chelus.sh").write_text("previous version")
             env = dict(os.environ, HOME=str(root), PATH=str(bin_dir) + os.pathsep + os.environ["PATH"])
             script = Path(__file__).resolve().parents[1] / "scripts" / "deploy.sh"
             result = subprocess.run(["sh", str(script)], env=env, capture_output=True, text=True, timeout=10)
-            return result, (install / "chelys.sh").read_text()
+            return result, (install / "chelus.sh").read_text()
 
     def test_failed_phone_suite_returns_failure_without_replacing_installed_code(self):
         result, launcher = self.run_deploy(7)
@@ -171,4 +171,4 @@ class DeployTests(unittest.TestCase):
     def test_successful_phone_suite_installs_the_verified_candidate(self):
         result, launcher = self.run_deploy(0)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("exec python -m chelys", launcher)
+        self.assertIn("exec python -m chelus", launcher)

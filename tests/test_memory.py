@@ -6,9 +6,9 @@ from __future__ import annotations
 import json
 import unittest
 
-from chelys import agent as agent_mod
-from chelys import memory, review, session_search, skill_tools, telegram, tools
-from chelys.store import Store
+from chelus import agent as agent_mod
+from chelus import memory, review, session_search, skill_tools, telegram, tools
+from chelus.store import Store
 from tests.test_agent import Base, FakeModel, make_settings
 from tests.test_skills import call, say
 from tests.test_telegram import GUEST, OWNER, FakeBot, msg
