@@ -32,7 +32,7 @@ Mocked tests establish behavior of the checked-in code, **not** production relia
 
 ## Outstanding for 1.0 and verification limits
 
-- **Scheduling/cron:** base scheduling integration is still planned/in progress. Do not describe recurring unattended jobs as a completed built-in subsystem.
+- **Scheduling/cron:** not built yet. The Hermes read and the proposed port list are in [docs/hermes/cron.md](hermes/cron.md). Do not describe recurring unattended jobs as a completed built-in subsystem.
 - **Unattended resilience:** Android process survival, extended background operation, reliable missed-wake recovery, and automatic restart after a reboot still need explicit end-to-end verification.
 - **Specific Telegram flows:** end-to-end approval-button interactions, newer skills flows, and memory-review/pending cards remain not independently verified in the live bridge.
 - **Release parity:** the on-phone code (tool approvals, Telegram photos, skill size limits) is back in this repository as of 2026-10-28. Integration setup (AgentMail, Vercel, MEGA, ADB) still lives only on the phone and is not documented here.
