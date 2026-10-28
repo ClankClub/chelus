@@ -255,6 +255,7 @@ class Agent:
         autorecover: Recover | None = None,
         guest: bool = False,
         actor: str = "foreground",
+        reusable_approvals: bool = True,
     ):
         self.s = s
         self.api_key = api_key
@@ -267,6 +268,7 @@ class Agent:
         self.autorecover = autorecover  # wait out outages (unattended surfaces)
         self.guest = guest          # a Telegram guest: no risky tools, no skills, confined file tools
         self.actor = actor          # "foreground", or "review" for the background skill review
+        self.reusable_approvals = reusable_approvals
         self.tool_names = tools.available(guest, disabled_tools(s, store))
         # The prompt is rebuilt from the conversation's frozen skill index and memory snapshot
         # at each turn start: the same bytes every turn until compaction refreshes both.
@@ -708,8 +710,28 @@ class Agent:
     def _execute(self, name: str, args: dict[str, Any]) -> tuple[str, bool]:
         """Run one tool. Returns (output, failed)."""
         tool = tools.TOOLS[name]
+        if self.guest and tool.risky:
+            return "denied: risky tools are for the owner only", True
+        args = dict(args)
+        reusable = self.reusable_approvals and self.actor == "foreground" and name in ("run_shell", "write_file")
+        key = ""
+        if reusable:
+            try:
+                key = tools.action_key(self.s, name, args, self)
+            except (tools.ToolError, OSError) as e:
+                return f"error: {e}", True
         summary = tools.describe_call(name, args)
-        if tool.risky and not approval_ok(self.approve(summary)):
+        choice = approval.ONCE
+        if tool.risky:
+            if reusable and self.store.tool_granted(key, self.session_id):
+                choice = approval.ONCE
+            else:
+                choice = approval.decision(self.approve(summary))
+            if choice == approval.SESSION and reusable:
+                self.store.grant_tool("*", self.session_id, "ordinary tools")
+            elif choice == approval.ALWAYS and reusable:
+                self.store.grant_tool(key, 0, name)
+        if tool.risky and choice == approval.DENY:
             self.on_event("denied", summary)
             return "denied: the owner did not approve this action", True
         self.on_event("tool", summary)

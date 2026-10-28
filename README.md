@@ -131,9 +131,13 @@ pkill -f "[p]ython -m chelys telegram"     # stop it
 | Tool | Approval |
 |---|---|
 | `list_dir`, `read_file`, `battery_status` | none |
-| `write_file`, `run_shell` | asks in chat; refused in `ask` unless you pass `--allow-risky` |
+| `write_file`, `run_shell` | once / this conversation / always this action / deny; refused in `ask` unless you pass `--allow-risky` |
 | `skills_list`, `skill_view` | none (owner only) |
 | `skill_manage` | asks, with more choices (see Skills) |
+
+**Ordinary tool approvals.** In chat and Telegram, `run_shell` and `write_file` ask by default. **Allow once** approves only that call; **Allow for this conversation** covers both ordinary risky tools in that conversation, including later messages and after a restart. `/new` asks again. **Always this action** remembers only the exact tool, normalized real working directory and target, and effect arguments (the complete command, or file path and content; shell timeout is included). Changing those asks again; changing only Chelys's explanation does not. This is not a command-prefix or global execute-all grant. Deny, unanswered prompts and allow-once do not save grants. Guests can neither use nor manage grants. Skill approvals remain separate.
+
+List ordinary grants with `/approvals` in chat or Telegram, or `chelys approvals` in the terminal. Use `/approvals revoke ID` or `/approvals clear` (terminal: `chelys approvals revoke ID` / `chelys approvals clear`). Listings show the grant ID, scope and tool/fingerprint, not stored commands or file contents. `ask` never reuses these grants: `--allow-risky` is still required explicitly.
 
 `run_shell` runs commands in Termux with a timeout and kills the whole process group when time runs out. It is not a sandbox. The approval prompt is the safety.
 
@@ -161,6 +165,7 @@ Skills live in `~/.local/share/chelys/skills/<category>/<name>/`. You can write 
 base_url = "https://api.deepseek.com"
 model = "deepseek-flash"      # DeepSeek renames models often; check their docs
 thinking = false              # sends {"thinking": {"type": "disabled"}}
+reasoning_effort = "high"     # low, high or max; sent only when thinking = true
 max_tokens = 2048
 request_timeout = 60.0        # longest wait for any single read from the API
 request_deadline = 300.0      # longest a whole model request may take

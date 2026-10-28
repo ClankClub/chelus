@@ -72,6 +72,14 @@ CREATE TABLE IF NOT EXISTS skill_grants (
     session_id INTEGER NOT NULL,
     PRIMARY KEY (skill, session_id)
 );
+-- Ordinary tool approvals are deliberately separate from skill grants.
+CREATE TABLE IF NOT EXISTS tool_grants (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    action_key TEXT NOT NULL,
+    session_id INTEGER NOT NULL,
+    tool TEXT NOT NULL,
+    UNIQUE(action_key, session_id)
+);
 CREATE TABLE IF NOT EXISTS skill_usage (
     name TEXT PRIMARY KEY,
     created_by TEXT,             -- agent (background review), learn (foreground), NULL: hand-made
@@ -435,6 +443,31 @@ class Store:
         with self.db:
             cur = self.db.execute("DELETE FROM skill_pending WHERE id = ?", (pid,))
         return cur.rowcount == 1
+
+    # ---- ordinary tool approvals ----
+
+    def grant_tool(self, action_key: str, session_id: int, tool: str) -> None:
+        with self.db:
+            self.db.execute("INSERT OR IGNORE INTO tool_grants (action_key, session_id, tool) VALUES (?, ?, ?)",
+                            (action_key, session_id, tool))
+
+    def tool_granted(self, action_key: str, session_id: int) -> bool:
+        return self.db.execute(
+            "SELECT 1 FROM tool_grants WHERE (action_key = ? AND session_id = 0) "
+            "OR (action_key = '*' AND session_id = ?)", (action_key, session_id)).fetchone() is not None
+
+    def tool_grants(self) -> list[dict[str, Any]]:
+        return [dict(zip(("id", "session_id", "tool", "action_key"), r)) for r in self.db.execute(
+            "SELECT id, session_id, tool, action_key FROM tool_grants ORDER BY id")]
+
+    def revoke_tool(self, grant_id: int | None = None) -> int:
+        """None explicitly clears ordinary grants only; skill approvals are untouched."""
+        with self.db:
+            if grant_id is None:
+                cur = self.db.execute("DELETE FROM tool_grants")
+            else:
+                cur = self.db.execute("DELETE FROM tool_grants WHERE id = ?", (grant_id,))
+        return cur.rowcount
 
     # ---- standing skill approvals ----
 

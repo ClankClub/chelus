@@ -36,6 +36,7 @@ HELP = (
     "/new  start a fresh conversation\n"
     "/learn [what]  turn something into a skill (empty: what we just did)\n"
     "/skills  list skills and waiting changes\n"
+    "/approvals [revoke ID|clear]  ordinary tool grants\n"
     "/pending  show skill changes waiting for your OK\n"
     "/undo <skill>  undo the last change to a skill\n"
     "/memory  what I remember about you and this phone\n"
@@ -55,7 +56,7 @@ GUEST_HELP = (
     "/stats reset  restore default mem/cpu/bat and enable footer\n"
     "/help  this message"
 )
-OWNER_ONLY = ("/learn", "/skills", "/pending", "/undo", "/memory")
+OWNER_ONLY = ("/learn", "/skills", "/pending", "/undo", "/memory", "/approvals")
 # Approval buttons: callback code -> choice
 CODES = {"ok": approval.ONCE, "se": approval.SESSION, "al": approval.ALWAYS, "no": approval.DENY}
 CHOICE_CODES = {v: k for k, v in CODES.items()}
@@ -240,7 +241,7 @@ class Bridge:
         if not isinstance(req, approval.Request):
             req = approval.Request(req)
         nonce = secrets.token_hex(4)
-        buttons = [{"text": approval.CHOICE_LABELS[c], "callback_data": f"{CHOICE_CODES[c]}:{nonce}"}
+        buttons = [{"text": req.label(c), "callback_data": f"{CHOICE_CODES[c]}:{nonce}"}
                    for c in req.choices]
         card = req.card()
         if len(card) > CARD_DETAIL + 400:
@@ -262,9 +263,11 @@ class Bridge:
                         self._answer_callback(cq, "That request has expired.")
                         continue
                     choice = CODES[code]
-                    self._answer_callback(cq, DONE_LABELS[choice])
+                    done = ("Always allowed for this action" if choice == approval.ALWAYS and not req.skill
+                            else DONE_LABELS[choice])
+                    self._answer_callback(cq, done)
                     fact = req.detail.split("\n", 1)[0] if req.detail else ""
-                    self._close_buttons(cq, f"{DONE_LABELS[choice]}: {req.title}" + (f"\n{fact}" if fact else ""))
+                    self._close_buttons(cq, f"{done}: {req.title}" + (f"\n{fact}" if fact else ""))
                     return choice
                 if self._is_owner_message(u):
                     self.pending.append(u["message"])
@@ -454,6 +457,9 @@ class Bridge:
             return
         if command in ("/skills", "/pending", "/undo"):
             self.skill_command(chat_id, command, arg)
+            return
+        if command == "/approvals":
+            self._send(chat_id, approval.manage(self.make_agent.store, arg))
             return
         if command == "/memory":
             self.memory_command(chat_id, arg)
