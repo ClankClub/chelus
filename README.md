@@ -108,6 +108,22 @@ This helper reads metrics only, starts no service, and must be restarted after a
 (nohup setsid chelus telegram > ~/.local/share/chelus/telegram.log 2>&1 < /dev/null &)
 ```
 
+## Scheduled jobs
+
+A job is a prompt that runs on a schedule; its reply arrives as a Telegram message. Jobs run only while the Telegram bridge is running.
+
+```sh
+chelus cron add "every day at 9am" Check the battery and tell me if it is under 30 percent
+chelus cron add --name tea "in 30m" Remind me the tea is ready
+chelus cron                     # list jobs
+chelus cron pause|resume|remove|run JOB
+chelus cron runs [JOB]          # recent runs and how they ended
+```
+
+Schedules: `30m` or `every 2h` (recurring), `in 30m` (once), `every monday 9am` or `weekdays at 9am`, five-field cron (`0 9 * * 1-5`), or a timestamp (`2026-11-02T09:00`, phone-local time). Options go before the schedule.
+
+Each run is a fresh conversation with no chat history; nobody is there to approve anything, so risky tools run only under an "Always" grant for that exact action, and the message lists what was denied. A reply of `[SILENT]` sends nothing. Missed runs are caught up once, marked late. The model can't create jobs itself yet; see [docs/hermes/cron.md](docs/hermes/cron.md).
+
 ## Tools, memory, and skills
 
 Chelus can list and read files, check the battery, write files, and run shell commands. File writes and shell commands require approval in chat; `chelus ask` refuses them unless you explicitly pass `--allow-risky`. **Shell access is not sandboxed.** File tools refuse the config and data directories and `~/.ssh`; guests are further confined to the configured `workdir`.

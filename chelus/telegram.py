@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import base64
 import json
+import math
 import mimetypes
 import secrets
 import ssl
@@ -22,7 +23,7 @@ import urllib.request
 from collections import deque
 from typing import Any
 
-from . import approval, curator, learn, memory, provider, review, skill_tools, skills
+from . import approval, cron, curator, learn, memory, provider, review, skill_tools, skills
 from .agent import LEARN_STEPS, Agent
 from .config import ConfigError, Settings, load_api_key
 from .stats import RuntimeStats, StatsPreferences
@@ -215,6 +216,7 @@ class Bridge:
         self.last_activity = time.monotonic()
         self.stats = RuntimeStats(s.workdir)
         self.stats_preferences = StatsPreferences(s.data_dir)
+        self.cron: cron.Runner | None = None  # scheduled jobs; set by run()
 
     def _decorate(self, chat_id: int, text: str) -> str:
         footer = self.stats.footer(self.stats_preferences.fields(chat_id)) if self.stats_preferences.enabled(chat_id) else ""
@@ -572,9 +574,14 @@ class Bridge:
         self.last_activity = time.monotonic()
 
     def housekeeping(self) -> None:
-        """Between polls: buttons pressed during a wait, and the weekly curator."""
+        """Between polls: buttons pressed during a wait, scheduled jobs, and the weekly curator."""
         while self.callbacks:
             self.handle_skill_button(self.callbacks.pop(0))
+        if self.cron is not None:
+            try:
+                cron.tick(self.cron.store, self.cron)
+            except Exception as e:  # the scheduler must never take the bridge down
+                self.log(f"[telegram] cron tick failed: {type(e).__name__}: {e}")
         report = curator.maybe_run(self.s, self.make_agent.store, time.monotonic() - self.last_activity)
         if report:
             self.log(f"[telegram] {report}")
@@ -585,17 +592,33 @@ class Bridge:
                     pass
 
 
+    def poll_wait(self) -> float:
+        """The long-poll wait, cut short when a scheduled job falls due sooner."""
+        if self.cron is None:
+            return POLL_SECONDS
+        try:
+            due = cron.seconds_until_due(self.cron.store)
+        except Exception:
+            return POLL_SECONDS
+        return POLL_SECONDS if due is None else max(1, min(POLL_SECONDS, math.ceil(due)))
+
     def run_forever(self) -> None:
         me = self.bot.call("getMe")
         who = f"owner {self.owner}" + (f" and {len(self.guests)} guest(s)" if self.guests else "")
         self.log(f"Telegram bridge running as @{me.get('username')}; answering only {who}. Ctrl-C stops it.")
+        if self.cron is not None:
+            try:
+                for run in cron.recover(self.cron.store, self.cron):
+                    self.log(f"[telegram] cron run {run['id']} of job {run['job_id']} was interrupted")
+            except Exception as e:
+                self.log(f"[telegram] cron recovery failed: {type(e).__name__}: {e}")
         backoff = 5
         while True:
             try:
                 while self.pending:
                     self.handle(self.pending.pop(0))
                 self.housekeeping()
-                for u in self._fetch(POLL_SECONDS):
+                for u in self._fetch(self.poll_wait()):
                     if self._is_owner_message(u):
                         self.handle(u["message"])
                     elif self._is_owner_callback(u):
@@ -673,6 +696,7 @@ def run(s: Settings) -> int:
             print(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {line}", flush=True)
 
         bridge = Bridge(s, Bot(token), owner, AgentFactory(s, api_key, store, owner), log=log, guests=guests)
+        bridge.cron = cron.Runner(s, api_key, store, deliver=lambda text: bridge._send(owner, text), log=log)
         bridge.run_forever()
     finally:
         store.close()

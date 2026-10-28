@@ -266,6 +266,51 @@ def cmd_approvals(s: Settings, args: argparse.Namespace) -> int:
         store.close()
 
 
+def cmd_cron(s: Settings, args: argparse.Namespace) -> int:
+    """Scheduled jobs. The Telegram bridge runs them; `run` runs one here and prints it."""
+    from . import cron, schedule
+    store = Store(s.db_path)
+    try:
+        act = args.action
+        if act == "list":
+            jobs = store.cron_jobs()
+            print("\n".join(cron.describe_job(j) for j in jobs) or "No scheduled jobs.")
+            if jobs:
+                print("\nJobs run while the Telegram bridge is running (chelus telegram).")
+        elif act == "add":
+            if len(args.rest) < 2:
+                raise cron.CronError('usage: chelus cron add [--name N] [--repeat N] SCHEDULE PROMPT... '
+                                     '(options first; quote the schedule: "every day at 9am")')
+            job = cron.create(store, args.rest[0], " ".join(args.rest[1:]), name=args.name,
+                              repeat=args.repeat, catch_up=not args.no_catch_up)
+            print("Added:\n" + cron.describe_job(job))
+        elif act in ("pause", "resume", "remove"):
+            if len(args.rest) != 1:
+                raise cron.CronError(f"usage: chelus cron {act} JOB")
+            job = getattr(cron, act)(store, args.rest[0])
+            print(("Removed: " if act == "remove" else "") + cron.describe_job(job))
+        elif act == "runs":
+            job_id = cron.resolve(store, args.rest[0])["id"] if args.rest else None
+            for r in store.cron_runs(job_id):
+                when = schedule.describe(r["finished"] or r["claimed"])
+                print(f"#{r['id']} {r['job_id']} {r['kind']}: {r['status']} at {when}, delivery {r['delivery']}"
+                      + (f", conversation #{r['session_id']}" if r["session_id"] else "")
+                      + (f"\n    {r['error']}" if r["error"] else ""))
+        elif act == "run":
+            if len(args.rest) != 1:
+                raise cron.CronError("usage: chelus cron run JOB")
+            runner = cron.Runner(s, load_api_key(s), store, log=lambda line: print(line, file=sys.stderr))
+            res = cron.run_now(store, runner, args.rest[0])
+            print(res.text or "(silent: the job had nothing to report)")
+            return EXIT_OK if res.status in ("ok", "silent") else EXIT_PROVIDER
+        return EXIT_OK
+    except (cron.CronError, schedule.ScheduleError) as e:
+        print(f"[cron] {e}", file=sys.stderr)
+        return EXIT_CONFIG
+    finally:
+        store.close()
+
+
 def cmd_telegram(s: Settings, args: argparse.Namespace) -> int:
     from . import telegram  # optional feature: only imported when used
     return telegram.run(s)
@@ -302,6 +347,18 @@ def build_parser() -> argparse.ArgumentParser:
                     help="list (default); view NAME; pending; approve ID; reject ID; undo NAME (the last change); "
                          "history [NAME]; pin/unpin NAME (curator); revoke NAME (drop 'always'); curate (run now)")
     sk.add_argument("name", nargs="?")
+    cr = sub.add_parser("cron", help="scheduled jobs: list, add, pause, resume, remove, run, runs")
+    cr.add_argument("action", nargs="?", default="list",
+                    choices=["list", "add", "pause", "resume", "remove", "run", "runs"],
+                    help="list (default); add [--name N] [--repeat N] SCHEDULE PROMPT... (options first); "
+                         "pause/resume/remove/run JOB; runs [JOB]. "
+                         "Schedules: '30m', 'every 2h', 'in 30m', 'every monday 9am', 'weekdays at 9am', "
+                         "'0 9 * * *', '2026-11-02T09:00'")
+    cr.add_argument("rest", nargs="*")
+    cr.add_argument("--name", help="add: a short name (default: the prompt's first line)")
+    cr.add_argument("--repeat", type=int, help="add: stop after this many runs (default: forever)")
+    cr.add_argument("--no-catch-up", action="store_true",
+                    help="add: skip a run missed by more than its grace window instead of running it late")
     me = sub.add_parser("memory", help="show what Chelus remembers, or forget an entry")
     me.add_argument("action", nargs="?", default="show", choices=["show", "forget", "path"],
                     help="show (default); forget user|memory N; path (where the files are, to edit by hand). "
@@ -316,7 +373,7 @@ def main(argv: list[str] | None = None) -> int:
         args = build_parser().parse_args(["chat", *(argv if argv is not None else sys.argv[1:])])
     handlers = {"chat": cmd_chat, "ask": cmd_ask, "sessions": cmd_sessions, "show": cmd_show,
                 "telegram": cmd_telegram, "usage": cmd_usage, "skills": cmd_skills, "memory": cmd_memory,
-                "approvals": cmd_approvals}
+                "approvals": cmd_approvals, "cron": cmd_cron}
     try:
         s = load_settings()
         return handlers[args.command](s, args)

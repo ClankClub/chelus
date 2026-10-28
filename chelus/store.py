@@ -98,6 +98,43 @@ CREATE TABLE IF NOT EXISTS meta (
     key TEXT PRIMARY KEY,
     value TEXT
 );
+-- Scheduled jobs (cron.py, docs/hermes/cron.md). next_run_at is the slot the next fire is
+-- for; a fire claims it by moving it forward in the same transaction that records the run.
+CREATE TABLE IF NOT EXISTS cron_jobs (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    prompt TEXT NOT NULL,
+    schedule TEXT NOT NULL,      -- JSON from schedule.parse
+    repeat_times INTEGER,        -- NULL: forever
+    repeat_done INTEGER NOT NULL DEFAULT 0,
+    catch_up INTEGER NOT NULL DEFAULT 1,
+    state TEXT NOT NULL DEFAULT 'scheduled',  -- scheduled, paused, completed, error
+    next_run_at REAL,
+    last_run_at REAL,
+    last_status TEXT,            -- ok, failed, missed, unknown
+    last_error TEXT,
+    failure_streak INTEGER NOT NULL DEFAULT 0,
+    created REAL NOT NULL,
+    finished_at REAL
+);
+-- Every fire, kept after its job is removed. UNIQUE(job_id, slot) is the at-most-once rule:
+-- a slot can be claimed once. Manual runs have no slot.
+CREATE TABLE IF NOT EXISTS cron_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_id TEXT NOT NULL,
+    slot REAL,
+    kind TEXT NOT NULL,          -- on_time, late, catch_up, manual, missed
+    status TEXT NOT NULL,        -- running, ok, failed, missed, unknown
+    pid INTEGER,
+    claimed REAL NOT NULL,
+    finished REAL,
+    session_id INTEGER,
+    error TEXT,
+    delivery TEXT,               -- sent, silent, failed, none
+    output TEXT,
+    UNIQUE (job_id, slot)
+);
+CREATE INDEX IF NOT EXISTS cron_runs_job ON cron_runs(job_id, id);
 """
 
 # Columns added after v0.1.0; existing databases get them on open.
@@ -112,7 +149,9 @@ MIGRATIONS = {
                  # memory: the stores frozen into this conversation's prompt and user turns
                  # since the last memory review; guest conversations are never searched
                  ("memory_snapshot", "TEXT"), ("memory_turns", "INTEGER NOT NULL DEFAULT 0"),
-                 ("guest", "INTEGER NOT NULL DEFAULT 0")],
+                 ("guest", "INTEGER NOT NULL DEFAULT 0"),
+                 # '' for conversations, 'cron' for a scheduled job's run
+                 ("origin", "TEXT NOT NULL DEFAULT ''")],
 }
 
 USAGE_FIELDS = ("calls", "prompt", "completion", "cache_hit", "cache_miss")
@@ -191,7 +230,9 @@ class Store:
         return int(cur.lastrowid)
 
     def latest_session(self) -> int | None:
-        row = self.db.execute("SELECT id FROM sessions ORDER BY updated DESC, id DESC LIMIT 1").fetchone()
+        """The latest conversation; a scheduled job's run session never counts."""
+        row = self.db.execute("SELECT id FROM sessions WHERE origin = '' "
+                              "ORDER BY updated DESC, id DESC LIMIT 1").fetchone()
         return int(row[0]) if row else None
 
     def session_exists(self, session_id: int) -> bool:
@@ -335,7 +376,8 @@ class Store:
 
     # ---- per-conversation skill and memory state ----
 
-    SESSION_FIELDS = ("skills_index", "skills_noted", "review_steps", "memory_snapshot", "memory_turns", "guest")
+    SESSION_FIELDS = ("skills_index", "skills_noted", "review_steps", "memory_snapshot", "memory_turns", "guest",
+                      "origin", "title")
 
     def session_field(self, session_id: int, column: str) -> Any:
         assert column in self.SESSION_FIELDS
@@ -527,6 +569,123 @@ class Store:
             self.db.execute("INSERT OR IGNORE INTO skill_usage (name) VALUES (?)", (name,))
             for k, v in fields.items():
                 self.db.execute(f"UPDATE skill_usage SET {k} = ? WHERE name = ?", (v, name))
+
+    # ---- scheduled jobs ----
+
+    JOB_COLS = ("id", "name", "prompt", "schedule", "repeat_times", "repeat_done", "catch_up", "state",
+                "next_run_at", "last_run_at", "last_status", "last_error", "failure_streak", "created",
+                "finished_at")
+    RUN_COLS = ("id", "job_id", "slot", "kind", "status", "pid", "claimed", "finished", "session_id",
+                "error", "delivery", "output")
+
+    def _job(self, row: tuple | None) -> dict[str, Any] | None:
+        if row is None:
+            return None
+        job = dict(zip(self.JOB_COLS, row))
+        try:
+            job["schedule"] = json.loads(job["schedule"])
+        except ValueError:
+            job["schedule"] = {}  # malformed: the scan marks it as an error instead of crashing
+        return job
+
+    def cron_add(self, job: dict[str, Any]) -> None:
+        row = dict(job, schedule=json.dumps(job["schedule"]))
+        cols = [c for c in self.JOB_COLS if c in row]
+        with self.db:
+            self.db.execute(f"INSERT INTO cron_jobs ({', '.join(cols)}) VALUES ({', '.join('?' * len(cols))})",
+                            [row[c] for c in cols])
+
+    def cron_job(self, job_id: str) -> dict[str, Any] | None:
+        return self._job(self.db.execute(f"SELECT {', '.join(self.JOB_COLS)} FROM cron_jobs WHERE id = ?",
+                                         (job_id,)).fetchone())
+
+    def cron_jobs(self) -> list[dict[str, Any]]:
+        """All jobs, soonest first."""
+        return [self._job(r) for r in self.db.execute(
+            f"SELECT {', '.join(self.JOB_COLS)} FROM cron_jobs ORDER BY next_run_at IS NULL, next_run_at, created")]
+
+    def cron_update(self, job_id: str, **fields: Any) -> bool:
+        assert fields and set(fields) <= set(self.JOB_COLS) - {"id"}
+        if "schedule" in fields:
+            fields["schedule"] = json.dumps(fields["schedule"])
+        with self.db:
+            cur = self.db.execute(f"UPDATE cron_jobs SET {', '.join(f'{k} = ?' for k in fields)} WHERE id = ?",
+                                  [*fields.values(), job_id])
+        return cur.rowcount == 1
+
+    def cron_remove(self, job_id: str) -> bool:
+        with self.db:
+            cur = self.db.execute("DELETE FROM cron_jobs WHERE id = ?", (job_id,))
+        return cur.rowcount == 1
+
+    def cron_next_due(self) -> float | None:
+        row = self.db.execute("SELECT MIN(next_run_at) FROM cron_jobs WHERE state = 'scheduled'").fetchone()
+        return row[0]
+
+    def cron_due(self, now: float) -> list[str]:
+        return [r[0] for r in self.db.execute(
+            "SELECT id FROM cron_jobs WHERE state = 'scheduled' AND next_run_at IS NOT NULL "
+            "AND next_run_at <= ? ORDER BY next_run_at", (now,))]
+
+    def cron_claim(self, job_id: str, slot: float, kind: str, *, next_run_at: float | None, state: str,
+                   bump: bool, status: str = "running", error: str | None = None) -> int | None:
+        """Claim a due slot: move the job past it and record the run, in one transaction.
+        None when the slot was already taken (another process, or a second tick)."""
+        now = time.time()
+        try:
+            with self.db:
+                cur = self.db.execute(
+                    "UPDATE cron_jobs SET next_run_at = ?, state = ?, repeat_done = repeat_done + ?, "
+                    "finished_at = CASE WHEN ? IN ('completed', 'error') THEN ? ELSE finished_at END "
+                    "WHERE id = ? AND state = 'scheduled' AND next_run_at = ?",
+                    (next_run_at, state, 1 if bump else 0, state, now, job_id, slot))
+                if cur.rowcount != 1:
+                    return None
+                cur = self.db.execute(
+                    "INSERT INTO cron_runs (job_id, slot, kind, status, pid, claimed, error, finished) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (job_id, slot, kind, status, os.getpid(), now, error, None if status == "running" else now))
+        except sqlite3.IntegrityError:
+            return None  # the ledger already has this slot: never fire it twice
+        return int(cur.lastrowid)
+
+    def cron_start_manual(self, job_id: str) -> int:
+        with self.db:
+            cur = self.db.execute("INSERT INTO cron_runs (job_id, slot, kind, status, pid, claimed) "
+                                  "VALUES (?, NULL, 'manual', 'running', ?, ?)", (job_id, os.getpid(), time.time()))
+        return int(cur.lastrowid)
+
+    def cron_finish_run(self, run_id: int, **fields: Any) -> None:
+        assert set(fields) <= {"status", "session_id", "error", "delivery", "output"}
+        fields["finished"] = time.time()
+        with self.db:
+            self.db.execute(f"UPDATE cron_runs SET {', '.join(f'{k} = ?' for k in fields)} WHERE id = ?",
+                            [*fields.values(), run_id])
+
+    def cron_run(self, run_id: int) -> dict[str, Any] | None:
+        row = self.db.execute(f"SELECT {', '.join(self.RUN_COLS)} FROM cron_runs WHERE id = ?", (run_id,)).fetchone()
+        return dict(zip(self.RUN_COLS, row)) if row else None
+
+    def cron_runs(self, job_id: str | None = None, limit: int = 20) -> list[dict[str, Any]]:
+        sql = f"SELECT {', '.join(self.RUN_COLS)} FROM cron_runs"
+        args: tuple = ()
+        if job_id:
+            sql += " WHERE job_id = ?"
+            args = (job_id,)
+        return [dict(zip(self.RUN_COLS, r)) for r in self.db.execute(sql + " ORDER BY id DESC LIMIT ?", args + (limit,))]
+
+    def cron_orphans(self) -> list[dict[str, Any]]:
+        """Runs still marked running whose process is gone: Chelus stopped mid-run."""
+        rows = [dict(zip(self.RUN_COLS, r)) for r in self.db.execute(
+            f"SELECT {', '.join(self.RUN_COLS)} FROM cron_runs WHERE status = 'running'")]
+        return [r for r in rows if r["pid"] != os.getpid() and not (r["pid"] and _pid_alive(int(r["pid"])))]
+
+    def cron_prune(self, keep_runs: int, done_before: float) -> None:
+        """Keep the newest runs, and finished one-shot jobs for a while after they finish."""
+        with self.db:
+            self.db.execute("DELETE FROM cron_runs WHERE status != 'running' AND id NOT IN "
+                            "(SELECT id FROM cron_runs ORDER BY id DESC LIMIT ?)", (keep_runs,))
+            self.db.execute("DELETE FROM cron_jobs WHERE state = 'completed' AND finished_at < ?", (done_before,))
 
     # ---- small key/value state ----
 

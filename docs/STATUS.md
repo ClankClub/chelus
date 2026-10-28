@@ -32,7 +32,7 @@ Mocked tests establish behavior of the checked-in code, **not** production relia
 
 ## Outstanding for 1.0 and verification limits
 
-- **Scheduling/cron:** not built yet. The Hermes read and the proposed port list are in [docs/hermes/cron.md](hermes/cron.md). Do not describe recurring unattended jobs as a completed built-in subsystem.
+- **Scheduling/cron:** the scheduler core is built: schedules, the job and run tables with at-most-once claims and catch-up, the tick in the Telegram bridge, and unattended runs that use only "Always" grants. A one-shot test job ran on time on the phone on 2026-10-28. Not built yet: the model's cron tool, so jobs are made with `chelus cron add` for now; delivery polish, retries for an unreachable model, and script jobs. Port list and status: [docs/hermes/cron.md](hermes/cron.md). Jobs run only while the bridge runs; recurring jobs over days, Doze catch-up and restart after a reboot are not verified.
 - **Unattended resilience:** Android process survival, extended background operation, reliable missed-wake recovery, and automatic restart after a reboot still need explicit end-to-end verification.
 - **Specific Telegram flows:** end-to-end approval-button interactions, newer skills flows, and memory-review/pending cards remain not independently verified in the live bridge.
 - **Release parity:** the on-phone code (tool approvals, Telegram photos, skill size limits) is back in this repository as of 2026-10-28. Integration setup (AgentMail, Vercel, MEGA, ADB) still lives only on the phone and is not documented here.

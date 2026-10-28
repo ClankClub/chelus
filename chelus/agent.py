@@ -746,7 +746,10 @@ class Agent:
         if self.guest and tool.risky:
             return "denied: risky tools are for the owner only", True
         args = dict(args)
-        reusable = self.reusable_approvals and self.actor == "foreground" and name in ("run_shell", "write_file")
+        # A scheduled run (actor "cron") can use "Always" grants; its approve callback denies
+        # everything else, since nobody is there to answer.
+        reusable = (self.reusable_approvals and self.actor in ("foreground", "cron")
+                    and name in ("run_shell", "write_file"))
         key = ""
         if reusable:
             try:
