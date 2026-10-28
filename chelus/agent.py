@@ -39,8 +39,8 @@ import time
 from importlib import resources
 from typing import Any, Callable
 
-# skill_tools, memory and session_search register their tools on import
-from . import approval, compaction, guardrails, memory, provider, session_search, skill_tools, skills, tools  # noqa: F401
+# skill_tools, memory, session_search and cron_tool register their tools on import
+from . import approval, compaction, cron_tool, guardrails, memory, provider, session_search, skill_tools, skills, tools  # noqa: F401
 from .config import Settings
 from .repetition import is_repetition_dominated
 from .store import SessionBusy, Store, history_chars, recent_window

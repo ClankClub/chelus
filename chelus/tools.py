@@ -280,7 +280,7 @@ def register(tool: Tool) -> None:
     TOOLS[tool.name] = tool
 
 
-OWNER_GROUPS = ("skills", "memory")
+OWNER_GROUPS = ("skills", "memory", "cron")
 
 
 def available(guest: bool = False, disabled: tuple[str, ...] = ()) -> list[str]:

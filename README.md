@@ -122,7 +122,9 @@ chelus cron runs [JOB]          # recent runs and how they ended
 
 Schedules: `30m` or `every 2h` (recurring), `in 30m` (once), `every monday 9am` or `weekdays at 9am`, five-field cron (`0 9 * * 1-5`), or a timestamp (`2026-11-02T09:00`, phone-local time). Options go before the schedule.
 
-Each run is a fresh conversation with no chat history; nobody is there to approve anything, so risky tools run only under an "Always" grant for that exact action, and the message lists what was denied. A reply of `[SILENT]` sends nothing. Missed runs are caught up once, marked late. The model can't create jobs itself yet; see [docs/hermes/cron.md](docs/hermes/cron.md).
+Each run is a fresh conversation with no chat history; nobody is there to approve anything, so risky tools run only under an "Always" grant for that exact action, and the message lists what was denied. A reply of `[SILENT]` sends nothing. Missed runs are caught up once, marked late. Port notes: [docs/hermes/cron.md](docs/hermes/cron.md).
+
+Chelus can also manage jobs from chat through its `cron` tool (create, list, update, pause, resume, remove, run): "remind me in 30 minutes" or "every weekday at 8:30 check the battery". It is owner only and absent from scheduled runs. Each create, update, resume, run and remove asks you first, with once or deny only, and a prompt that looks like prompt injection or secret theft is refused before you are asked. `run` queues the job for the bridge's next tick; its result comes as a message, not into the chat.
 
 ## Tools, memory, and skills
 

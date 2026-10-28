@@ -31,7 +31,7 @@ import traceback
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
-from . import approval, provider, schedule
+from . import approval, cron_scan, provider, schedule
 from .config import Settings
 from .store import SessionBusy, Store
 
@@ -70,6 +70,8 @@ def create(store: Store, schedule_text: str, prompt: str, name: str | None = Non
     prompt = (prompt or "").strip()
     if not prompt:
         raise CronError("a job needs a prompt: what Chelus should do when it runs")
+    if blocked := cron_scan.scan(prompt):
+        raise CronError(blocked)
     sched = schedule.parse(schedule_text, now=now)
     if sched["kind"] == schedule.ONCE:
         if sched["run_at"] < now - 60:
@@ -97,10 +99,66 @@ def resolve(store: Store, ref: str) -> dict[str, Any]:
     exact = [j for j in jobs if j["id"] == ref]
     matches = exact or [j for j in jobs if ref and j["id"].startswith(ref)] or [j for j in jobs if j["name"] == ref]
     if not matches:
-        raise CronError(f"no job {ref!r} (see: chelus cron list)")
+        raise CronError(f"no job {ref!r}; list the jobs to see their ids")
     if len(matches) > 1:
         raise CronError(f"{ref!r} matches {len(matches)} jobs: " + ", ".join(j["id"] for j in matches))
     return matches[0]
+
+
+def update(store: Store, ref: str, schedule_text: str | None = None, prompt: str | None = None,
+           name: str | None = None, repeat: int | None = None, catch_up: bool | None = None,
+           now: float | None = None) -> dict[str, Any]:
+    """Change the parts of a job that are given. A new schedule moves the next run to its first
+    slot after now, unless the job is paused."""
+    now = time.time() if now is None else now
+    job = resolve(store, ref)
+    if job["state"] == "completed":
+        raise CronError(f"job {job['id']} has finished; create a new one")
+    fields: dict[str, Any] = {}
+    if prompt is not None:
+        prompt = prompt.strip()
+        if not prompt:
+            raise CronError("a job needs a prompt: what Chelus should do when it runs")
+        if blocked := cron_scan.scan(prompt):
+            raise CronError(blocked)
+        fields["prompt"] = prompt
+    if name is not None:
+        fields["name"] = (name.strip().splitlines() or [""])[0][:NAME_CHARS] or job["name"]
+    if catch_up is not None:
+        fields["catch_up"] = 1 if catch_up else 0
+    if schedule_text is not None:
+        sched = schedule.parse(schedule_text, now=now)
+        if sched["kind"] == schedule.ONCE:
+            if sched["run_at"] < now - 60:
+                raise CronError(f"{schedule.describe(sched['run_at'])} has already passed")
+            first: float | None = max(sched["run_at"], now)
+            fields["repeat_times"] = 1
+        else:
+            first = schedule.next_run(sched, now)
+            if first is None:
+                raise CronError(f"{sched['display']!r} never comes round")
+        fields["schedule"] = sched
+        if job["state"] in ("scheduled", "error"):
+            fields.update(next_run_at=first, state="scheduled")
+        elif job["state"] == "paused":
+            fields["next_run_at"] = first
+    if repeat is not None and "repeat_times" not in fields:
+        fields["repeat_times"] = repeat if repeat > 0 else None
+    if not fields:
+        raise CronError("nothing to change: give a new schedule, prompt, name, repeat or catch_up")
+    store.cron_update(job["id"], **fields)
+    return store.cron_job(job["id"])
+
+
+def trigger(store: Store, ref: str, now: float | None = None) -> dict[str, Any]:
+    """Make a scheduled job due now; the next tick (the Telegram bridge) runs it. A recurring
+    job keeps its schedule afterwards."""
+    job = resolve(store, ref)
+    if job["state"] != "scheduled":
+        raise CronError(f"job {job['id']} is {job['state']}; only a scheduled job can be run now"
+                        + (" (resume it first)" if job["state"] in ("paused", "error") else ""))
+    store.cron_update(job["id"], next_run_at=time.time() if now is None else now)
+    return store.cron_job(job["id"])
 
 
 def pause(store: Store, ref: str) -> dict[str, Any]:
@@ -238,6 +296,8 @@ class Runner:
                 raise provider.ProviderError(f"the run took longer than its {RUN_LIMIT_S // 60}-minute limit")
 
         try:
+            if blocked := cron_scan.scan(job["prompt"]):  # a prompt edited into the database by hand
+                raise provider.ProviderError(blocked)
             sid = self.store.new_session()
             self.store.set_session_field(sid, "origin", "cron")
             self.store.set_session_field(sid, "title", f"cron: {job['name']}"[:60])

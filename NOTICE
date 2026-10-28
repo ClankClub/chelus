@@ -7,7 +7,11 @@ Chelus is inspired by Hermes Agent:
 Chelus is an independent project and is not affiliated with or endorsed by
 Nous Research. "Hermes Agent" is their name for their software.
 
-Chelus contains no verbatim Hermes source files. `chelus/guardrails.py`,
+Chelus contains no verbatim Hermes source files, but `chelus/cron_scan.py` reuses
+the threat and exfiltration regular expressions from Hermes's
+cronjob_prompt_scan.py, and the schedule wording in `chelus/cron_tool.py` is
+adapted from Hermes's cronjob_tools.py (both MIT, Copyright (c) 2025 Nous
+Research). `chelus/guardrails.py`,
 `chelus/repetition.py` and `chelus/compaction.py` are rebuilt from Hermes's
 tool_guardrails, repetition_guard and context_compressor modules (same
 thresholds and rules, written independently).
