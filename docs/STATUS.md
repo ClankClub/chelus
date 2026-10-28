@@ -39,3 +39,7 @@ Mocked tests establish behavior of the checked-in code, **not** production relia
 - **Portability:** the Galaxy A10e/32-bit Termux is the demonstrated platform. Additional hardware/OS support should be claimed only after testing.
 
 Run the source test suite with `python -m unittest discover -s tests -t .`. Report separately what passed in desktop mocks, tests executed on the phone, and actual live network/device use. Avoid converting either self-reported field results or mocked tests into stronger guarantees than they support.
+
+## Audit fixes (merged 2026-10-28)
+
+Seven 2026-10-24 audit findings are fixed: Telegram batch tails, session ownership during slow retries, executable launcher and canonical install URL, bounded shell output, staged deployment with true test status, provider response validation, and guest listing metadata filtering. Covered by mocked tests; not yet run on the phone.

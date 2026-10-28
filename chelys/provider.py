@@ -45,6 +45,7 @@ RETRY_AFTER_CAP_S = 600.0
 BACKOFF_BASE_S = 2.0
 BACKOFF_MAX_S = 60.0
 LONG_WAIT_S = 60.0  # waits at least this long are announced to the user as they start
+RESPONSE_MAX_BYTES = 2 * 1024 * 1024
 
 # 408 request timeout, 429 rate limit, and every 5xx are transient.
 RETRYABLE_STATUS = frozenset({408, 429})
@@ -203,7 +204,24 @@ def _chat_once(
         data = json.loads(raw)
         choice = data["choices"][0]
         message = choice["message"]
-    except (ValueError, KeyError, IndexError, TypeError):
+        if not isinstance(message, dict):
+            raise ValueError("message must be an object")
+        for field in ("content", "reasoning_content"):
+            if message.get(field) is not None and not isinstance(message[field], str):
+                raise ValueError(f"{field} must be text or null")
+        calls = message.get("tool_calls")
+        if calls is not None:
+            if not isinstance(calls, list):
+                raise ValueError("tool_calls must be a list")
+            for tc in calls:
+                if not isinstance(tc, dict) or not isinstance(tc.get("function"), dict):
+                    raise ValueError("invalid tool call")
+                fn = tc["function"]
+                if (not isinstance(tc.get("id"), str) or not tc["id"].strip()
+                        or not isinstance(fn.get("name"), str) or not fn["name"].strip()
+                        or (fn.get("arguments") is not None and not isinstance(fn["arguments"], str))):
+                    raise ValueError("invalid tool call fields")
+    except (ValueError, KeyError, IndexError, TypeError, RecursionError):
         # Hermes treats a 200 without choices like a transient server error ("empty
         # responses often mean rate limiting"), so it is retried.
         raise ProviderError(f"unexpected response from model API: {raw[:300]!r}", retryable=True, transient=True) from None
@@ -234,6 +252,7 @@ def _read_until(resp: Any, deadline: float, total: float) -> bytes:
     one socket timeout.
     """
     chunks = []
+    size = 0
     while True:
         if time.monotonic() > deadline:
             raise ProviderError(f"model request took longer than {total:g}s in total",
@@ -241,6 +260,10 @@ def _read_until(resp: Any, deadline: float, total: float) -> bytes:
         chunk = resp.read1(65536)
         if not chunk:
             return b"".join(chunks)
+        size += len(chunk)
+        if size > RESPONSE_MAX_BYTES:
+            raise ProviderError(f"model response exceeded {RESPONSE_MAX_BYTES} bytes",
+                                retryable=True, transient=True)
         chunks.append(chunk)
 
 
@@ -248,7 +271,7 @@ def _http_error(e: urllib.error.HTTPError) -> ProviderError:
     detail = ""
     retry_after = parse_retry_after(e.headers.get("Retry-After") if e.headers else None)
     try:
-        parsed = json.loads(e.read()[:2000])
+        parsed = json.loads(e.read(2000))
         if isinstance(parsed, dict):
             err = parsed.get("error")
             if isinstance(err, dict):

@@ -82,7 +82,13 @@ def _list_dir(s: Settings, args: dict[str, Any], ctx: Any = None) -> str:
     if not p.is_dir():
         raise ToolError(f"not a directory: {p}")
     rows = []
-    for entry in sorted(p.iterdir(), key=lambda e: e.name)[:200]:
+    for entry in sorted(p.iterdir(), key=lambda e: e.name):
+        if getattr(ctx, "guest", False) and entry.name.startswith("."):
+            continue
+        try:
+            _resolve(s, str(entry), ctx)
+        except ToolError:
+            continue  # do not stat or disclose protected children, even through links
         try:
             if entry.is_dir():
                 rows.append(f"{entry.name}/")
@@ -90,6 +96,8 @@ def _list_dir(s: Settings, args: dict[str, Any], ctx: Any = None) -> str:
                 rows.append(f"{entry.name}  {entry.stat().st_size} bytes")
         except OSError:
             rows.append(f"{entry.name}  (unreadable)")
+        if len(rows) >= 200:
+            break
     return f"{p}\n" + ("\n".join(rows) if rows else "(empty)")
 
 
@@ -118,6 +126,9 @@ def _write_file(s: Settings, args: dict[str, Any], ctx: Any = None) -> str:
 
 
 def _run_shell(s: Settings, args: dict[str, Any], ctx: Any = None) -> str:
+    import selectors
+    import time
+
     command = args.get("command")
     if not isinstance(command, str) or not command.strip():
         raise ToolError("command must be a non-empty string")
@@ -131,17 +142,49 @@ def _run_shell(s: Settings, args: dict[str, Any], ctx: Any = None) -> str:
         stdin=subprocess.DEVNULL,
         start_new_session=(os.name == "posix"),
     )
+    buffers = {proc.stdout: bytearray(), proc.stderr: bytearray()}
+    total, limit, exceeded = 0, 65536, False
+    deadline = time.monotonic() + s.shell_timeout
     try:
-        raw_out, raw_err = proc.communicate(timeout=s.shell_timeout)
+        with selectors.DefaultSelector() as selector:
+            for pipe in buffers:
+                selector.register(pipe, selectors.EVENT_READ)
+            while selector.get_map():
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise subprocess.TimeoutExpired(command, s.shell_timeout)
+                for key, _ in selector.select(remaining):
+                    chunk = key.fileobj.read1(8192)
+                    if not chunk:
+                        selector.unregister(key.fileobj)
+                        continue
+                    keep = min(len(chunk), limit - total)
+                    buffers[key.fileobj].extend(chunk[:keep])
+                    total += keep
+                    if keep < len(chunk):
+                        exceeded = True
+                        _kill_group(proc)
+                        break
+                if exceeded:
+                    break
+            if not exceeded:
+                proc.wait(timeout=max(0, deadline - time.monotonic()))
     except subprocess.TimeoutExpired:
         _kill_group(proc)
         raise ToolError(f"command timed out after {s.shell_timeout:g}s and was killed") from None
     except BaseException:
         _kill_group(proc)
         raise
-    out = raw_out.decode("utf-8", errors="replace")
-    err = raw_err.decode("utf-8", errors="replace")
-    parts = [f"exit code {proc.returncode}"]
+    finally:
+        for pipe in buffers:
+            pipe.close()
+    out = buffers[proc.stdout].decode("utf-8", errors="replace")
+    err = buffers[proc.stderr].decode("utf-8", errors="replace")
+    if exceeded:
+        parts = [f"error: shell output exceeded {limit} bytes; process group stopped",
+                 f"exit code {proc.returncode}"]
+    else:
+        parts = [f"exit code {proc.returncode}"]
     if out:
         parts.append("stdout:\n" + out)
     if err:
@@ -158,7 +201,7 @@ def _kill_group(proc: subprocess.Popen) -> None:
     except (ProcessLookupError, PermissionError, OSError):
         pass
     try:
-        proc.communicate(timeout=5)
+        proc.wait(timeout=5)
     except Exception:
         pass
 

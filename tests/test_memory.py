@@ -263,6 +263,22 @@ class MemoryReviewTests(Base):
         a = agent_mod.Agent(self.s, "k", self.store, self.sid, lambda r: True, chat_fn=model)
         return a
 
+    def test_lost_ownership_stops_memory_review_without_ending_chat(self):
+        self.owner(FakeModel([say("hello")])).run_turn("hi")
+        before = self.store.messages(self.sid)
+        def model(*args, **kw):
+            with self.store.db:
+                self.store.db.execute("UPDATE sessions SET lease_holder = 'replacement' WHERE id = ?", (self.sid,))
+            return call("memory", mem("user", "add", content="Must not be saved."), "r1")
+        parent = self.owner(model)
+        parent.memory_review_due = True
+        result = review.run(parent)
+        self.assertIn("lost turn ownership", result.reply)
+        self.assertEqual(memory.read(self.s, "user"), [])
+        self.assertEqual(self.store.messages(self.sid), before)
+        self.assertEqual(self.store.db.execute("SELECT lease_holder FROM sessions WHERE id = ?", (self.sid,)).fetchone()[0],
+                         "replacement")
+
     def test_review_adds_directly_and_stages_removals_pinned_to_the_entry(self):
         ctx = Ctx(self.store)
         memory.handle(self.s, mem("user", "add", content="Owner lives in Porto."), ctx)

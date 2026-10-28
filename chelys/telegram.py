@@ -11,6 +11,7 @@ it can't run here. This file copies its behavior, not its code.
 from __future__ import annotations
 
 import json
+from collections import deque
 import secrets
 import ssl
 import time
@@ -169,6 +170,7 @@ class Bridge:
         self.make_agent = agent_factory
         self.log = log
         self.offset = 0
+        self.updates: deque[dict[str, Any]] = deque()
         self.pending: list[dict[str, Any]] = []   # owner messages that arrived during an approval wait
         self.callbacks: list[dict[str, Any]] = [] # pending-skill buttons pressed during a wait
         self.ignored = 0
@@ -205,14 +207,18 @@ class Bridge:
     # ---- update intake -------------------------------------------------
 
     def _fetch(self, wait: float) -> list[dict[str, Any]]:
-        updates = self.bot.call(
-            "getUpdates",
-            {"offset": self.offset, "timeout": int(wait), "allowed_updates": ["message", "callback_query"]},
-            wait=wait,
-        )
-        if updates:
-            self.offset = updates[-1]["update_id"] + 1
-        return updates
+        # Deliver one event at a time. Nested approval/outage polls and early returns
+        # must leave the remainder of a fetched batch available to the next consumer.
+        if not self.updates:
+            updates = self.bot.call(
+                "getUpdates",
+                {"offset": self.offset, "timeout": int(wait), "allowed_updates": ["message", "callback_query"]},
+                wait=wait,
+            )
+            self.updates.extend(updates)
+            if updates:
+                self.offset = updates[-1]["update_id"] + 1
+        return [self.updates.popleft()] if self.updates else []
 
     def _is_owner_message(self, u: dict[str, Any]) -> bool:
         m = u.get("message")

@@ -43,7 +43,7 @@ from typing import Any, Callable
 from . import approval, compaction, guardrails, memory, provider, session_search, skill_tools, skills, tools  # noqa: F401
 from .config import Settings
 from .repetition import is_repetition_dominated
-from .store import Store, history_chars, recent_window
+from .store import SessionBusy, Store, history_chars, recent_window
 
 Approve = Callable[[str], bool]
 Event = Callable[[str, str], None]
@@ -260,7 +260,12 @@ class Agent:
         self.api_key = api_key
         self.store = store
         self.session_id = session_id
-        self.approve = approve
+        def checked_approval(req):
+            self._renew()
+            answer = approve(req)
+            self._renew()  # also fences approval waits inside skill_manage
+            return answer
+        self.approve = checked_approval
         self.on_event = on_event or (lambda kind, text: None)
         self.chat_fn = chat_fn
         self.hard_stop = hard_stop  # let the loop guard stop a turn (unattended surfaces)
@@ -341,6 +346,7 @@ class Agent:
 
     def _add(self, turn: list[dict[str, Any]], row: dict[str, Any]) -> None:
         """Add a row to the turn and, unless it is scaffolding, save it now."""
+        self._renew()
         turn.append(row)
         if not row.get("_scaffold"):
             self.store.append(self.session_id, self._turn_no, [row])
@@ -360,7 +366,7 @@ class Agent:
             if self.tools_started:
                 note += f"; tools that already ran: {', '.join(self.tools_started)}{MAY_HAVE_RUN}"
             self._add(turn, {"role": "assistant", "content": note + "]"})
-        except sqlite3.Error:
+        except (sqlite3.Error, SessionBusy):
             pass  # never let a failed save hide the error that ended the turn
 
     def _close_open_turn(self, history: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -495,6 +501,7 @@ class Agent:
         summaries."""
         msg = self.chat_fn(self.s, self.api_key, [{"role": "user", "content": prompt}], [],
                            max_tokens=self.s.max_tokens_limit, on_retry=self._on_retry)
+        self._renew()
         usage = msg.pop("_usage", None)
         if isinstance(usage, dict):
             self._log_usage(usage)
@@ -601,6 +608,7 @@ class Agent:
             try:
                 msg = self.chat_fn(self.s, self.api_key, messages, schemas, max_tokens=max_tokens,
                                    on_retry=self._on_retry)
+                self._renew()
                 break
             except provider.ProviderError as e:
                 self._recover_or_raise(e)
@@ -628,8 +636,8 @@ class Agent:
         if self._lease is not None:
             try:
                 self.store.renew_lease(self.session_id, self._lease)
-            except sqlite3.Error:
-                pass
+            except sqlite3.Error as e:
+                raise SessionBusy("could not verify turn ownership; stopping this turn") from e
 
     def _boosted_cap(self, n: int) -> int:
         """max_tokens for cut-off retry n: base * 2^n, at most max(32768, 2 * base),
@@ -707,6 +715,7 @@ class Agent:
 
     def _execute(self, name: str, args: dict[str, Any]) -> tuple[str, bool]:
         """Run one tool. Returns (output, failed)."""
+        self._renew()
         tool = tools.TOOLS[name]
         summary = tools.describe_call(name, args)
         if tool.risky and not approval_ok(self.approve(summary)):
