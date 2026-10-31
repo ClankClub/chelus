@@ -41,6 +41,11 @@ def _data_dir() -> Path:
     return _dir("DATA_DIR", Path.home() / ".local" / "share")
 
 
+def _cache_dir() -> Path:
+    """Throwaway files the model may read back (saved tool output). Not off limits."""
+    return Path(os.environ.get("CHELUS_CACHE_DIR") or Path.home() / ".cache" / "chelus")
+
+
 @dataclass
 class Settings:
     # Provider
@@ -63,9 +68,14 @@ class Settings:
     compaction: bool = True
     # Loop limits
     max_iterations: int = 8
+    # Longer tool output is saved to a file the model pages with read_file (spill.py).
     tool_output_chars: int = 6000
     shell_timeout: float = 30.0
-    read_file_bytes: int = 65536
+    read_file_bytes: int = 65536  # no longer used (read_file pages by lines); old configs still load
+    # web_fetch and web_search (owner only, no approval; web.py). web_chars is how much of a
+    # page the model sees at once; the rest is saved for paging.
+    web: bool = True
+    web_chars: int = 8000
     # How much past conversation is sent to the model, in characters (~4 chars per token).
     history_chars: int = 40000
     # Skills. "ask": every skill write needs the owner's OK (once, this conversation, or always
@@ -92,6 +102,7 @@ class Settings:
     workdir: str = field(default_factory=lambda: str(Path.home()))
     config_dir: Path = field(default_factory=_config_dir)
     data_dir: Path = field(default_factory=_data_dir)
+    cache_dir: Path = field(default_factory=_cache_dir)
 
     @property
     def db_path(self) -> Path:
@@ -116,7 +127,7 @@ def load_settings() -> Settings:
             raise ConfigError(f"could not read {path}: {e}") from e
         known = {f.name: f for f in fields(Settings)}
         for key, value in data.items():
-            if key not in known or key in ("config_dir", "data_dir"):
+            if key not in known or key in ("config_dir", "data_dir", "cache_dir"):
                 raise ConfigError(f"unknown setting {key!r} in {path}")
             current = getattr(s, key)
             ok = type(value) is type(current) or (type(current) is float and type(value) is int)

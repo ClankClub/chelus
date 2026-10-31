@@ -138,7 +138,11 @@ Chelus can also manage jobs from chat through its `cron` tool (create, list, upd
 
 ## Tools, memory, and skills
 
-Chelus can list and read files, check the battery, write files, and run shell commands. File writes and shell commands require approval in chat; `chelus ask` refuses them unless you explicitly pass `--allow-risky`. **Shell access is not sandboxed.** File tools refuse the config and data directories and `~/.ssh`; guests are further confined to the configured `workdir`.
+Chelus can list and read files, check the battery, write files, run shell commands, read web pages and search the web. File writes and shell commands require approval in chat; `chelus ask` refuses them unless you explicitly pass `--allow-risky`. **Shell access is not sandboxed.** File tools refuse the config and data directories and `~/.ssh`; guests are further confined to the configured `workdir`.
+
+**Web (owner only, no approval).** `web_fetch` reads a public http(s) page as text with its links. It refuses private, local and cloud-metadata addresses, including through redirects and DNS tricks, URLs with credentials or credential-named query parameters, and anything that isn't text. It sends no cookies or keys, so authenticated APIs still go through `run_shell`. `web_search` uses DuckDuckGo's HTML page, or Brave Search when `~/.config/chelus/brave.key` holds a key. DuckDuckGo rate-limits busy IPs, so a key makes search dependable. Set `web = false` to turn both off. Details and limits: [docs/hermes/tools.md](docs/hermes/tools.md).
+
+**Long output.** Tool output over `tool_output_chars` (default 6,000) shows its start and end, and the full text is saved under `~/.cache/chelus/spill/` (private to you, deleted after a day). `read_file` pages through that file, or any long file, with `offset` and `limit`. Saved shell output has credential-looking strings masked. Guests' output is only cut.
 
 **Memory:** Chelus can keep small, owner-only notes across conversations. It can save facts directly and shows what was saved; proposed changes from background review await approval. Inspect or delete entries with `chelus memory` (or `/memory` in Telegram). With SQLite FTS5 available, the agent can also search past conversations.
 
@@ -181,9 +185,11 @@ memory = true
 memory_review_interval = 10
 session_search = true
 curator = true
+web = true
+web_chars = 8000            # how much of a page the model sees at once
 ```
 
-The defaults and full set of supported keys are in [chelus/config.py](chelus/config.py); unknown keys or wrong types are errors. `CHELUS_CONFIG_DIR` and `CHELUS_DATA_DIR` override the respective directories. Chelus was called Chelys until 2026-10-28: on first start, `~/.config/chelys` and `~/.local/share/chelys` are moved to their `chelus` names and a symlink is left at the old path, and `CHELYS_CONFIG_DIR` / `CHELYS_DATA_DIR` are still honored. Customize the agent's personality with `~/.config/chelus/persona.md`; otherwise it uses [the default persona](chelus/persona_default.md).
+The defaults and full set of supported keys are in [chelus/config.py](chelus/config.py); unknown keys or wrong types are errors. `CHELUS_CONFIG_DIR`, `CHELUS_DATA_DIR` and `CHELUS_CACHE_DIR` (default `~/.cache/chelus`) override the respective directories. Chelus was called Chelys until 2026-10-28: on first start, `~/.config/chelys` and `~/.local/share/chelys` are moved to their `chelus` names and a symlink is left at the old path, and `CHELYS_CONFIG_DIR` / `CHELYS_DATA_DIR` are still honored. Customize the agent's personality with `~/.config/chelus/persona.md`; otherwise it uses [the default persona](chelus/persona_default.md).
 
 ## Development
 

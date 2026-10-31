@@ -40,7 +40,7 @@ from importlib import resources
 from typing import Any, Callable
 
 # skill_tools, memory, session_search and cron_tool register their tools on import
-from . import approval, compaction, cron_tool, guardrails, memory, provider, session_search, skill_tools, skills, tools  # noqa: F401
+from . import approval, compaction, cron_tool, guardrails, memory, provider, session_search, skill_tools, skills, spill, tools, web  # noqa: F401
 from .config import Settings
 from .repetition import is_repetition_dominated
 from .store import SessionBusy, Store, history_chars, recent_window
@@ -118,6 +118,8 @@ def disabled_tools(s: Settings, store: Store | None = None) -> tuple[str, ...]:
         off.append("memory")
     if not s.session_search or (store is not None and not store.fts):
         off.append("session_search")
+    if not s.web:
+        off += ["web_fetch", "web_search"]
     return tuple(off)
 
 
@@ -136,8 +138,10 @@ def system_prompt(s: Settings, guest: bool = False, skills_index: str | None = N
         "Each user message ends with the local time it was sent.\n"
         f"The owner must approve {risky} before they run; a denial is final for that call, so don't retry it. "
         "Fill in `purpose` plainly: the owner decides from it on a small screen. "
-        f"You get at most {s.max_iterations} model steps per message, and tool output is cut off after "
-        f"{s.tool_output_chars} characters. Keep replies short: the owner may be reading on a phone."
+        f"You get at most {s.max_iterations} model steps per message. Tool output is cut off after "
+        f"{s.tool_output_chars} characters"
+        + ("" if guest else "; the footer of long output says how to read the rest with read_file") +
+        ". Keep replies short: the owner may be reading on a phone."
     )
     if guest:
         prompt += ("\n\nYou are talking with a guest the owner invited, not the owner. Risky tools are off for "
@@ -722,7 +726,7 @@ class Agent:
             # Hermes's repeat-view dedup. Never in the review, which must load fresh copies.
             stub = (f"[skill_view: unchanged since it was loaded earlier in this conversation; use that "
                     f"copy, it is still in your context]")
-        content = stub or _clip(out, tools.TOOLS[name].max_output or self.s.tool_output_chars)
+        content = stub or self._fit(name, out)
         if decision.action in ("warn", "halt"):
             content += decision.guidance()
             self.on_event("guard", decision.message)
@@ -733,6 +737,15 @@ class Agent:
         if notice:
             content += "\n\n" + notice
         return content
+
+    def _fit(self, name: str, out: str) -> str:
+        """Tool output within its cap. The owner's long output is saved for read_file to
+        page; a guest's is only cut, since guests can't read the cache folder."""
+        tool = tools.TOOLS[name]
+        limit = tool.max_output or self.s.tool_output_chars
+        if self.guest or not tool.spill:
+            return _clip(out, limit)
+        return spill.fit(self.s, name, out, limit, redact=(name == "run_shell"))
 
     def _already_shown(self, out: str) -> bool:
         """True if this exact tool result is already in what the model sees."""

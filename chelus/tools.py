@@ -37,6 +37,7 @@ class Tool:
     risky: bool = False
     group: str = "core"            # "skills", "memory": owner only, never offered to guests
     max_output: int | None = None  # output cap, if not tool_output_chars
+    spill: bool = True             # output past the cap is saved for paging, not just cut
 
     def schema(self) -> dict[str, Any]:
         return {
@@ -102,16 +103,74 @@ def _list_dir(s: Settings, args: dict[str, Any], ctx: Any = None) -> str:
     return f"{p}\n" + ("\n".join(rows) if rows else "(empty)")
 
 
+READ_MAX_LINES = 2000
+COUNT_LINES_UP_TO = 20 * 1024 * 1024  # past this size the total line count is not worked out
+
+
+def _int_arg(args: dict[str, Any], key: str, low: int, high: int | None = None) -> int | None:
+    value = args.get(key)
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or value != int(value):
+        raise ToolError(f"{key} must be a whole number")
+    value = int(value)
+    if value < low or (high is not None and value > high):
+        raise ToolError(f"{key} must be between {low} and {high}" if high else f"{key} must be at least {low}")
+    return value
+
+
+def read_budget(s: Settings) -> int:
+    """Characters of file text read_file returns per call, so its result never needs cutting."""
+    return max(1000, s.tool_output_chars - 300)
+
+
 def _read_file(s: Settings, args: dict[str, Any], ctx: Any = None) -> str:
+    """A file, or a window of its lines. A file that fits comes back as is; otherwise as
+    much as fits, with a footer naming the offset to read on from."""
     p = _resolve(s, args.get("path"), ctx)
     if not p.is_file():
         raise ToolError(f"not a file: {p}")
+    offset = _int_arg(args, "offset", 1) or 1
+    limit = _int_arg(args, "limit", 1, READ_MAX_LINES) or READ_MAX_LINES
+    budget = read_budget(s)
+    size = p.stat().st_size
     with p.open("rb") as f:
-        data = f.read(s.read_file_bytes + 1)
-    text = data[: s.read_file_bytes].decode("utf-8", errors="replace")
-    if len(data) > s.read_file_bytes:
-        text += f"\n... [stopped after {s.read_file_bytes} bytes]"
-    return text
+        if b"\0" in f.read(8192):
+            raise ToolError(f"{p} looks like a binary file ({size} bytes), not text")
+    count_all = size <= COUNT_LINES_UP_TO
+    lines: list[str] = []
+    chars = total = end = 0
+    cut_line = more = False
+    with p.open("r", encoding="utf-8", errors="replace", newline="") as f:
+        for total, line in enumerate(f, 1):
+            if total < offset:
+                continue
+            if more:
+                if not count_all:
+                    total = 0
+                    break
+                continue
+            if len(lines) >= limit or chars + len(line) > budget:
+                if not lines:  # one line longer than the whole budget
+                    lines.append(line[:budget] + "\n")
+                    cut_line, end = True, total
+                more = True
+                continue
+            lines.append(line)
+            chars += len(line)
+            end = total
+    if offset > 1 and not lines:
+        raise ToolError(f"offset {offset} is past the end of {p} ({total} lines)")
+    text = "".join(lines)
+    if offset == 1 and not more and not cut_line:
+        return text
+    of = f"of {total}" if total else "of a file too big to count"
+    note = f"[{p}: lines {offset}-{end} {of}"
+    if cut_line:
+        note += f"; line {end} is longer than {budget} characters and was cut"
+    if more:
+        note += f". Read on with read_file offset={end + 1}"
+    return text + ("" if text.endswith("\n") or not text else "\n") + note + "]"
 
 
 def _write_file(s: Settings, args: dict[str, Any], ctx: Any = None) -> str:
@@ -257,9 +316,15 @@ TOOLS: dict[str, Tool] = {
         ),
         Tool(
             "read_file",
-            "Read a text file on the phone (large files are cut off).",
-            obj({"path": {"type": "string"}}, ["path"]),
+            "Read a text file on the phone. Use this instead of cat, head or tail in run_shell. A long file "
+            "comes back in pieces: the footer gives the offset to read on from. Also reads saved long output "
+            "(paths under ~/.cache/chelus/spill) that other tools point to.",
+            obj({"path": {"type": "string"},
+                 "offset": {"type": "integer", "description": "First line to read, counting from 1. Default 1."},
+                 "limit": {"type": "integer", "description": f"Most lines to return (at most {READ_MAX_LINES})."}},
+                ["path"]),
             _read_file,
+            spill=False,
         ),
         Tool(
             "write_file",
@@ -290,7 +355,7 @@ def register(tool: Tool) -> None:
     TOOLS[tool.name] = tool
 
 
-OWNER_GROUPS = ("skills", "memory", "cron")
+OWNER_GROUPS = ("skills", "memory", "cron", "web")
 
 
 def available(guest: bool = False, disabled: tuple[str, ...] = ()) -> list[str]:

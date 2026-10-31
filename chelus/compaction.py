@@ -70,13 +70,16 @@ _SECRET_PATTERNS = [
 ]
 
 
-def redact(text: str) -> str:
-    """Hide anything that looks like a credential before it reaches a summary."""
+def redact(text: str, keep_lines: bool = False) -> str:
+    """Hide anything that looks like a credential before it reaches a summary. With
+    keep_lines, a masked span keeps its line breaks, so line numbers still match."""
+    def pad(m: re.Match) -> str:
+        return "\n" * m.group(0).count("\n") if keep_lines else ""
     for pat in _SECRET_PATTERNS:
         if pat.groups >= 2:
-            text = pat.sub(lambda m: f"{m.group(1)}{m.group(2)}[REDACTED]", text)
+            text = pat.sub(lambda m: f"{m.group(1)}{m.group(2)}[REDACTED]{pad(m)}", text)
         else:
-            text = pat.sub("[REDACTED]", text)
+            text = pat.sub(lambda m: f"[REDACTED]{pad(m)}", text)
     return text
 
 
