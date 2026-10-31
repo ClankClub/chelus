@@ -38,6 +38,9 @@ class Tool:
     group: str = "core"            # "skills", "memory": owner only, never offered to guests
     max_output: int | None = None  # output cap, if not tool_output_chars
     spill: bool = True             # output past the cap is saved for paging, not just cut
+    # Runs before approval: may fill in args for the card, raise ToolError (no prompt), or
+    # return a final answer when there is nothing to approve.
+    prepare: Callable[..., str | None] | None = None
 
     def schema(self) -> dict[str, Any]:
         return {
@@ -181,8 +184,10 @@ def _write_file(s: Settings, args: dict[str, Any], ctx: Any = None) -> str:
     if p.is_dir():
         raise ToolError(f"is a directory: {p}")
     p.parent.mkdir(parents=True, exist_ok=True)
+    from .edit import write_hint
+    hint = write_hint(p, content)
     p.write_text(content, encoding="utf-8")
-    return f"wrote {len(content.encode('utf-8'))} bytes to {p}"
+    return f"wrote {len(content.encode('utf-8'))} bytes to {p}" + hint
 
 
 def run_bounded(argv: list[str], cwd: str, timeout: float, limit: int = 65536,
@@ -439,6 +444,10 @@ def action_key(s: Settings, name: str, args: dict[str, Any], ctx: Any = None) ->
             raise ToolError("content must be a string")
         args["path"] = str(path)  # the card, fingerprint and handler use the same real target
         effect.update(path=str(path), content=content)
+    elif name == "edit_file":
+        if "_diff" not in args:
+            raise ToolError("edit not prepared")
+        effect.update(path=str(args.get("path")), diff=args["_diff"])
     else:
         raise ToolError("no reusable approval for this tool")
     return hashlib.sha256(json.dumps(effect, sort_keys=True, ensure_ascii=True).encode()).hexdigest()
@@ -479,4 +488,13 @@ def describe_call(name: str, args: dict[str, Any], s: Settings | None = None) ->
             f"write_file: {path!r} ({size} chars)", title=f"{verb} a file on the phone", purpose=purpose,
             detail=f"File: {path}\nSize: {size} chars, {lines} lines\nStarts with:\n{preview}",
             choices=(approval.ONCE, approval.SESSION, approval.ALWAYS, approval.DENY))
-    return approval.Request(f"{name}({json.dumps(args)[:200]})", title=f"Use {name}", purpose=purpose)
+    if name == "edit_file" and "_diff" in args:
+        from .edit import card_diff
+        path = str(args.get("path"))
+        note = f"\n{args['_note']}" if args.get("_note") else ""
+        return approval.Request(
+            f"edit_file: {path!r}", title="Edit a file on the phone", purpose=purpose,
+            detail=f"File: {path}{note}\nChange:\n{card_diff(args['_diff'])}",
+            choices=(approval.ONCE, approval.SESSION, approval.ALWAYS, approval.DENY))
+    shown = {k: v for k, v in args.items() if not k.startswith("_")}
+    return approval.Request(f"{name}({json.dumps(shown)[:200]})", title=f"Use {name}", purpose=purpose)

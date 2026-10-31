@@ -17,6 +17,7 @@ Chelus is a Python standard-library-only AI agent for 32-bit Android/Termux, ins
 - `store.py`, `compaction.py`: SQLite history, session ownership and summaries.
 - `tools.py`, `approval.py`: local tools, file confinement, bounded shell capture, approval cards and grants.
 - `jobs.py`: background shell runs, their worker process, logs and finish notices.
+- `search.py`, `edit.py`: `search_files` (ripgrep or a Python walk) and `edit_file` (find and replace, diff on the card).
 - `web.py`, `spill.py`: `web_fetch`/`web_search` with the public-address guard, and long tool output saved for `read_file` paging.
 - `skills.py`, `skill_tools.py`, `skill_guard.py`, `learn.py`, `review.py`, `curator.py`: skills, scanning, background review and archival.
 - `memory.py`, `session_search.py`: MEMORY/USER stores and FTS5 history search.

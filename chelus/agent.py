@@ -40,7 +40,7 @@ from importlib import resources
 from typing import Any, Callable
 
 # skill_tools, memory, session_search and cron_tool register their tools on import
-from . import approval, compaction, cron_tool, guardrails, memory, provider, session_search, skill_tools, skills, spill, tools, web  # noqa: F401
+from . import approval, compaction, cron_tool, guardrails, memory, provider, session_search, skill_tools, skills, spill, tools, web, edit, search  # noqa: F401
 from .config import Settings
 from .repetition import is_repetition_dominated
 from .store import SessionBusy, Store, history_chars, recent_window
@@ -758,11 +758,18 @@ class Agent:
         tool = tools.TOOLS[name]
         if self.guest and tool.risky:
             return "denied: risky tools are for the owner only", True
-        args = dict(args)
+        args = {k: v for k, v in args.items() if not str(k).startswith("_")}
+        if tool.prepare is not None:  # e.g. edit_file works out its diff before the owner is asked
+            try:
+                done = tool.prepare(self.s, args, self)
+            except (tools.ToolError, OSError) as e:
+                return f"error: {e}", True
+            if done is not None:
+                return done, False
         # A scheduled run (actor "cron") can use "Always" grants; its approve callback denies
         # everything else, since nobody is there to answer.
         reusable = (self.reusable_approvals and self.actor in ("foreground", "cron")
-                    and name in ("run_shell", "write_file"))
+                    and name in ("run_shell", "write_file", "edit_file"))
         key = ""
         if reusable:
             try:
