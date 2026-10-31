@@ -115,6 +115,8 @@ CREATE TABLE IF NOT EXISTS cron_jobs (
     last_error TEXT,
     failure_streak INTEGER NOT NULL DEFAULT 0,
     retries INTEGER NOT NULL DEFAULT 0,  -- unreachable-model retries used for the current slot
+    script TEXT,                 -- a file in the scripts folder, run before the model (or instead)
+    no_agent INTEGER NOT NULL DEFAULT 0,  -- 1: the script's output is the message; no model
     created REAL NOT NULL,
     finished_at REAL
 );
@@ -153,7 +155,8 @@ MIGRATIONS = {
                  ("guest", "INTEGER NOT NULL DEFAULT 0"),
                  # '' for conversations, 'cron' for a scheduled job's run
                  ("origin", "TEXT NOT NULL DEFAULT ''")],
-    "cron_jobs": [("retries", "INTEGER NOT NULL DEFAULT 0")],
+    "cron_jobs": [("retries", "INTEGER NOT NULL DEFAULT 0"), ("script", "TEXT"),
+                  ("no_agent", "INTEGER NOT NULL DEFAULT 0")],
 }
 
 USAGE_FIELDS = ("calls", "prompt", "completion", "cache_hit", "cache_miss")
@@ -182,6 +185,7 @@ def _pid_alive(pid: int) -> bool:
 class Store:
     def __init__(self, path: Path):
         path.parent.mkdir(parents=True, exist_ok=True)
+        self.path = path
         self.db = sqlite3.connect(str(path))
         self.db.execute("PRAGMA foreign_keys = ON")
         self.db.executescript(SCHEMA)
@@ -576,7 +580,7 @@ class Store:
 
     JOB_COLS = ("id", "name", "prompt", "schedule", "repeat_times", "repeat_done", "catch_up", "state",
                 "next_run_at", "last_run_at", "last_status", "last_error", "failure_streak", "created",
-                "finished_at", "retries")
+                "finished_at", "retries", "script", "no_agent")
     RUN_COLS = ("id", "job_id", "slot", "kind", "status", "pid", "claimed", "finished", "session_id",
                 "error", "delivery", "output")
 

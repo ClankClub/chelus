@@ -47,6 +47,7 @@ HELP = (
     "/undo <skill>  undo the last change to a skill\n"
     "/memory  what I remember about you and this phone\n"
     "/memory forget user|memory N  delete entry N\n"
+    "/cron  scheduled jobs; /cron pause|resume|run|remove JOB\n"
     "/stop  cancel an automatic retry while DeepSeek is down\n"
     "/stats [on|off|info]  toggle/set runtime footer, or show telemetry\n"
     "/stats add|remove mem cpu bat swap up disk  select fields for this chat\n"
@@ -62,7 +63,7 @@ GUEST_HELP = (
     "/stats reset  restore default mem/cpu/bat and enable footer\n"
     "/help  this message"
 )
-OWNER_ONLY = ("/learn", "/skills", "/pending", "/undo", "/memory", "/approvals")
+OWNER_ONLY = ("/learn", "/skills", "/pending", "/undo", "/memory", "/approvals", "/cron")
 # Approval buttons: callback code -> choice
 CODES = {"ok": approval.ONCE, "se": approval.SESSION, "al": approval.ALWAYS, "no": approval.DENY}
 CHOICE_CODES = {v: k for k, v in CODES.items()}
@@ -437,6 +438,32 @@ class Bridge:
         else:
             self._send(chat_id, "Usage: /memory, or /memory forget user|memory N")
 
+    def cron_command(self, chat_id: int, arg: str) -> None:
+        """Manage jobs without the model, so a noisy job can be stopped while DeepSeek is down.
+        The owner typed it, so nothing asks again."""
+        store = self.make_agent.store
+        parts = arg.split(maxsplit=1)
+        act = parts[0].lower() if parts else "list"
+        ref = parts[1].strip() if len(parts) > 1 else ""
+        try:
+            if act == "list" and not ref:
+                jobs = store.cron_jobs()
+                text = "\n".join(cron.describe_job(j) for j in jobs) or "No scheduled jobs."
+            elif act in ("pause", "resume") and ref:
+                job = getattr(cron, act)(store, ref)
+                text = f"{act.capitalize()}d.\n{cron.describe_job(job)}"
+            elif act == "remove" and ref:
+                job = cron.remove(store, ref)
+                text = f"Removed job {job['id']} ({job['name']})."
+            elif act == "run" and ref:
+                job = cron.trigger(store, ref)
+                text = f"Running {job['name']} now; its result comes as its own message."
+            else:
+                text = "Usage: /cron, or /cron pause|resume|run|remove JOB (an id, id prefix or exact name)"
+        except cron.CronError as e:
+            text = f"[cron] {e}"
+        self._send(chat_id, text)
+
     def after_reply(self, chat_id: int, agent: Agent) -> None:
         """The background review, after the reply is out (Hermes runs it the same way)."""
         if not (agent.review_due or agent.memory_review_due):
@@ -518,6 +545,9 @@ class Bridge:
             return
         if command == "/memory":
             self.memory_command(chat_id, arg)
+            return
+        if command == "/cron":
+            self.cron_command(chat_id, arg)
             return
         image_data_url = None
         if photo_sizes:

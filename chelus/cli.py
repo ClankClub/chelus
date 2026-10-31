@@ -278,11 +278,13 @@ def cmd_cron(s: Settings, args: argparse.Namespace) -> int:
             if jobs:
                 print("\nJobs run while the Telegram bridge is running (chelus telegram).")
         elif act == "add":
-            if len(args.rest) < 2:
-                raise cron.CronError('usage: chelus cron add [--name N] [--repeat N] SCHEDULE PROMPT... '
-                                     '(options first; quote the schedule: "every day at 9am")')
+            if len(args.rest) < (1 if args.no_agent else 2):
+                raise cron.CronError('usage: chelus cron add [--name N] [--repeat N] [--script FILE [--no-agent]] '
+                                     'SCHEDULE PROMPT... (options first; quote the schedule: "every day at 9am"; '
+                                     'a --no-agent job needs no prompt)')
             job = cron.create(store, args.rest[0], " ".join(args.rest[1:]), name=args.name,
-                              repeat=args.repeat, catch_up=not args.no_catch_up)
+                              repeat=args.repeat, catch_up=not args.no_catch_up,
+                              script=args.script, no_agent=args.no_agent)
             print("Added:\n" + cron.describe_job(job))
         elif act in ("pause", "resume", "remove"):
             if len(args.rest) != 1:
@@ -357,6 +359,10 @@ def build_parser() -> argparse.ArgumentParser:
     cr.add_argument("rest", nargs="*")
     cr.add_argument("--name", help="add: a short name (default: the prompt's first line)")
     cr.add_argument("--repeat", type=int, help="add: stop after this many runs (default: forever)")
+    cr.add_argument("--script", help="add: a file in the scripts folder (~/.local/share/chelus/scripts) to run "
+                                     "first; its output goes in front of the prompt")
+    cr.add_argument("--no-agent", action="store_true",
+                    help="add: send the script's output as the message, with no model (needs --script)")
     cr.add_argument("--no-catch-up", action="store_true",
                     help="add: skip a run missed by more than its grace window instead of running it late")
     me = sub.add_parser("memory", help="show what Chelus remembers, or forget an entry")

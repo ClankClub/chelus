@@ -67,7 +67,7 @@ def _text(args: dict[str, Any], key: str) -> str | None:
     return value
 
 
-def _check(args: dict[str, Any], action: str) -> None:
+def _check(store: Any, args: dict[str, Any], action: str) -> None:
     """Everything that can be refused is refused before the owner is asked."""
     sched = _text(args, "schedule")
     prompt = _text(args, "prompt")
@@ -78,9 +78,17 @@ def _check(args: dict[str, Any], action: str) -> None:
             schedule.parse(sched)
         except schedule.ScheduleError as e:
             raise tools.ToolError(f"{e}. {SCHEDULE_HELP}") from None
+    if _text(args, "script"):
+        try:
+            cron.script_path(store, _text(args, "script"))
+        except cron.CronError as e:
+            raise tools.ToolError(str(e)) from None
     if action == "create":
         _need(args, "schedule", action)
-        _need(args, "prompt", action)
+        if _flag(args, "no_agent"):
+            _need(args, "script", action)
+        else:
+            _need(args, "prompt", action)
 
 
 def _request(action: str, args: dict[str, Any], job: dict[str, Any] | None) -> approval.Request:
@@ -94,6 +102,11 @@ def _request(action: str, args: dict[str, Any], job: dict[str, Any] | None) -> a
         lines.append(f"Schedule: {_text(args, 'schedule')}")
     elif job and job["schedule"]:
         lines.append(f"Schedule: {job['schedule'].get('display', '?')}")
+    script = _text(args, "script") if args.get("script") is not None else (job or {}).get("script")
+    no_agent = _flag(args, "no_agent") if args.get("no_agent") is not None else bool((job or {}).get("no_agent"))
+    if script:
+        lines.append(f"Script: {script}, which runs unattended" + (" and whose output is the message, with no model"
+                                                                   if no_agent else ", before the model"))
     if action in ("create", "update") and shown:
         lines.append("Prompt, which runs unattended and messages you:\n" + shown)
     titles = {"create": "Schedule a new job", "update": "Change a scheduled job", "resume": "Resume a scheduled job",
@@ -124,18 +137,20 @@ def handle(s: Any, args: dict[str, Any], ctx: Any = None) -> str:
             return f"{len(jobs)} job(s):\n" + "\n".join(_line(j) for j in jobs)
         ref = _need(args, "job_id", action) if action != "create" else None
         job = cron.resolve(store, ref) if ref else None
-        _check(args, action)
+        _check(store, args, action)
         if action in GATED and getattr(ctx, "approve", None):
             choice = approval.decision(ctx.approve(_request(action, args, job)))
             if choice == approval.DENY:
                 return "denied: the owner did not approve this. Don't retry it unless they ask."
         if action == "create":
-            made = cron.create(store, _need(args, "schedule", action), _need(args, "prompt", action),
-                               name=_text(args, "name"), repeat=_repeat(args), catch_up=_flag(args, "catch_up") is not False)
+            made = cron.create(store, _need(args, "schedule", action), _text(args, "prompt") or "",
+                               name=_text(args, "name"), repeat=_repeat(args), catch_up=_flag(args, "catch_up") is not False,
+                               script=_text(args, "script"), no_agent=bool(_flag(args, "no_agent")))
             return "Scheduled.\n" + _line(made) + _delivery_note()
         if action == "update":
             changed = cron.update(store, ref, schedule_text=_text(args, "schedule"), prompt=_text(args, "prompt"),
-                                  name=_text(args, "name"), repeat=_repeat(args), catch_up=_flag(args, "catch_up"))
+                                  name=_text(args, "name"), repeat=_repeat(args), catch_up=_flag(args, "catch_up"),
+                                  script=_text(args, "script"), no_agent=_flag(args, "no_agent"))
             return "Updated.\n" + _line(changed)
         if action == "pause":
             return "Paused.\n" + _line(cron.pause(store, ref))
@@ -161,21 +176,27 @@ tools.register(tools.Tool(
     "cron",
     "Schedule recurring or one-off jobs that run Chelus later on its own and message the owner the result, and "
     "manage them. WHEN: the owner asks for a reminder, a regular check or report, or something done at a "
-    "set time. action 'create' needs schedule and prompt; 'list' shows the jobs; 'update', 'pause', 'resume', "
+    "set time. action 'create' needs schedule and prompt (or script with no_agent); 'list' shows the jobs; 'update', 'pause', 'resume', "
     "'remove' and 'run' take a job_id, so list first and never guess one. 'run' starts a job now in the "
     "background; its result goes to the owner, not to this conversation. A job runs in a fresh conversation "
     "with no memory of this chat, so its prompt must say everything it needs; its final reply is the message "
     "the owner gets, and it cannot ask questions. A job whose final reply is exactly [SILENT] sends nothing, "
     "so for 'only tell me if ...' tasks end the prompt with 'otherwise reply exactly [SILENT]'. Prefer "
-    "updating an existing job over creating a near-duplicate. The owner is asked before anything is created, changed, resumed, run or removed. "
+    "updating an existing job over creating a near-duplicate. A job can also run a script from Chelus's scripts "
+    "folder first ('script'): its output is put in front of the prompt, empty output or a last line of "
+    '{"wakeAgent": false} skips the model and sends nothing, and a failing script is reported as is. With '
+    "'no_agent' true the script's output is the message itself and no model runs, which costs no tokens: good "
+    "for checks like battery or storage. Scripts are files the owner put there; this tool can't write them. The owner is asked before anything is created, changed, resumed, run or removed. "
     + SCHEDULE_HELP,
     tools.obj({
         "action": {"type": "string", "enum": list(ACTIONS)},
         "job_id": {"type": "string", "description": "update, pause, resume, remove, run: the job's id (or its exact name), from list."},
         "schedule": {"type": "string", "description": "create (required) and update: when to run. " + SCHEDULE_HELP},
-        "prompt": {"type": "string", "description": "create (required) and update: the complete, self-contained instructions the job follows."},
+        "prompt": {"type": "string", "description": "create (required unless no_agent) and update: the complete, self-contained instructions the job follows."},
         "name": {"type": "string", "description": "Optional short name for the job."},
         "repeat": {"type": "integer", "description": "Optional: stop after this many runs. Omit or 0 for forever (a one-shot runs once)."},
+        "script": {"type": "string", "description": "create and update: optional file name of a script in Chelus's scripts folder (.sh runs with bash, anything else with Python). Empty string on update removes it."},
+        "no_agent": {"type": "boolean", "description": "create and update: true sends the script's output as the message without running the model."},
         "catch_up": {"type": "boolean", "description": "Default true: if Chelus was off when a run was due, run once when it is back. False skips missed runs."},
         "purpose": tools.PURPOSE,
     }, ["action"]),

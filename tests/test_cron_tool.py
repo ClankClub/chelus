@@ -47,6 +47,23 @@ class ToolTests(Base):
         a = self.agent(FakeModel([]), approve=self.approve)
         return tools.TOOLS["cron"].handler(self.s, args, a)
 
+    def test_script_jobs_are_checked_first_and_shown_on_the_card(self):
+        with self.assertRaisesRegex(tools.ToolError, "no script 'batt.sh'"):
+            self.call(action="create", schedule="every 1h", script="batt.sh", no_agent=True)
+        with self.assertRaisesRegex(tools.ToolError, "needs 'script'"):
+            self.call(action="create", schedule="every 1h", no_agent=True)
+        self.assertEqual(self.asked, [])  # refused before the owner is asked
+        (cron.scripts_dir(self.store) / "batt.sh").write_text("echo 80\n")
+        out = self.call(action="create", schedule="every 1h", script="batt.sh", no_agent=True, name="battery")
+        self.assertIn("Scheduled.", out)
+        self.assertIn("Script: batt.sh, which runs unattended and whose output is the message, with no model",
+                      self.asked[0].detail)
+        job = self.store.cron_jobs()[0]
+        self.assertEqual((job["script"], job["no_agent"], job["prompt"]), ("batt.sh", 1, ""))
+        self.call(action="update", job_id="battery", no_agent=False, prompt="Warn me under 20%.")
+        self.assertIn("before the model", self.asked[1].detail)
+        self.assertEqual(self.store.cron_job(job["id"])["no_agent"], 0)
+
     def test_create_asks_once_or_deny_and_shows_the_prompt(self):
         out = self.call(action="create", schedule="every day at 9am", prompt="Report the battery level.",
                         name="battery", purpose="You asked for a daily battery report.")

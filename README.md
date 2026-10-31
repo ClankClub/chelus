@@ -124,6 +124,16 @@ Schedules: `30m` or `every 2h` (recurring), `in 30m` (once), `every monday 9am` 
 
 Each run is a fresh conversation with no chat history; nobody is there to approve anything, so risky tools run only under an "Always" grant for that exact action, and the message lists what was denied. A reply of `[SILENT]` sends nothing. A message from a recurring job ends with its next run and how to stop it, and your next message to Chelus carries what jobs sent you since you last wrote, so "do it" in reply to a reminder works. Missed runs are caught up once, marked late. If the model can't be reached at all, a recurring job tries again after 5, 15 and 30 minutes before reporting; after three failures in a row the notice suggests pausing the job. Port notes: [docs/hermes/cron.md](docs/hermes/cron.md).
 
+A job can run a script first. Put the file in `~/.local/share/chelus/scripts/` (`.sh` runs with bash, anything else with Python) and add `--script FILE`. Its output goes in front of the prompt; empty output, or a last line of `{"wakeAgent": false}`, sends nothing and skips the model; a failing script is reported as is. With `--no-agent` the output is the message and no model runs, so a check costs no tokens:
+
+```sh
+chelus cron add --name battery --script battery.py --no-agent "every day at 9am"
+```
+
+Scripts run in their own process group from the work folder, for at most 5 minutes and 16 KB of output, with no environment variable whose name looks like a key, token, secret or password, and their output is redacted.
+
+On Telegram, `/cron` lists jobs and `/cron pause|resume|run|remove JOB` manages them without the model, so a noisy job can be stopped while DeepSeek is down. It is owner only.
+
 Chelus can also manage jobs from chat through its `cron` tool (create, list, update, pause, resume, remove, run): "remind me in 30 minutes" or "every weekday at 8:30 check the battery". It is owner only and absent from scheduled runs. Each create, update, resume, run and remove asks you first, with once or deny only, and a prompt that looks like prompt injection or secret theft is refused before you are asked. `run` queues the job for the bridge's next tick; its result comes as a message, not into the chat.
 
 ## Tools, memory, and skills

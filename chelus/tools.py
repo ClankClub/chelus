@@ -126,26 +126,26 @@ def _write_file(s: Settings, args: dict[str, Any], ctx: Any = None) -> str:
     return f"wrote {len(content.encode('utf-8'))} bytes to {p}"
 
 
-def _run_shell(s: Settings, args: dict[str, Any], ctx: Any = None) -> str:
+def run_bounded(argv: list[str], cwd: str, timeout: float, limit: int = 65536,
+                env: dict[str, str] | None = None) -> tuple[int | None, str, str, bool]:
+    """Run argv in its own process group with no stdin. Returns (exit code, stdout, stderr,
+    exceeded). Past `limit` bytes of output the group is stopped and exceeded is True. Raises
+    subprocess.TimeoutExpired after killing the group when it runs past `timeout` seconds."""
     import selectors
     import time
 
-    command = args.get("command")
-    if not isinstance(command, str) or not command.strip():
-        raise ToolError("command must be a non-empty string")
-    shell = shutil.which("bash") or shutil.which("sh") or "/system/bin/sh"
-    # Own process group, so a timeout or Ctrl-C kills the command and anything it spawned.
     proc = subprocess.Popen(
-        [shell, "-c", command],
-        cwd=s.workdir,
+        argv,
+        cwd=cwd,
+        env=env,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         stdin=subprocess.DEVNULL,
         start_new_session=(os.name == "posix"),
     )
     buffers = {proc.stdout: bytearray(), proc.stderr: bytearray()}
-    total, limit, exceeded = 0, 65536, False
-    deadline = time.monotonic() + s.shell_timeout
+    total, exceeded = 0, False
+    deadline = time.monotonic() + timeout
     try:
         with selectors.DefaultSelector() as selector:
             for pipe in buffers:
@@ -153,7 +153,7 @@ def _run_shell(s: Settings, args: dict[str, Any], ctx: Any = None) -> str:
             while selector.get_map():
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
-                    raise subprocess.TimeoutExpired(command, s.shell_timeout)
+                    raise subprocess.TimeoutExpired(argv, timeout)
                 for key, _ in selector.select(remaining):
                     chunk = key.fileobj.read1(8192)
                     if not chunk:
@@ -170,22 +170,32 @@ def _run_shell(s: Settings, args: dict[str, Any], ctx: Any = None) -> str:
                     break
             if not exceeded:
                 proc.wait(timeout=max(0, deadline - time.monotonic()))
-    except subprocess.TimeoutExpired:
-        _kill_group(proc)
-        raise ToolError(f"command timed out after {s.shell_timeout:g}s and was killed") from None
     except BaseException:
         _kill_group(proc)
         raise
     finally:
         for pipe in buffers:
             pipe.close()
-    out = buffers[proc.stdout].decode("utf-8", errors="replace")
-    err = buffers[proc.stderr].decode("utf-8", errors="replace")
+    return (proc.returncode, buffers[proc.stdout].decode("utf-8", errors="replace"),
+            buffers[proc.stderr].decode("utf-8", errors="replace"), exceeded)
+
+
+def _run_shell(s: Settings, args: dict[str, Any], ctx: Any = None) -> str:
+    command = args.get("command")
+    if not isinstance(command, str) or not command.strip():
+        raise ToolError("command must be a non-empty string")
+    shell = shutil.which("bash") or shutil.which("sh") or "/system/bin/sh"
+    limit = 65536
+    # Own process group, so a timeout or Ctrl-C kills the command and anything it spawned.
+    try:
+        code, out, err, exceeded = run_bounded([shell, "-c", command], s.workdir, s.shell_timeout, limit)
+    except subprocess.TimeoutExpired:
+        raise ToolError(f"command timed out after {s.shell_timeout:g}s and was killed") from None
     if exceeded:
         parts = [f"error: shell output exceeded {limit} bytes; process group stopped",
-                 f"exit code {proc.returncode}"]
+                 f"exit code {code}"]
     else:
-        parts = [f"exit code {proc.returncode}"]
+        parts = [f"exit code {code}"]
     if out:
         parts.append("stdout:\n" + out)
     if err:
