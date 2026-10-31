@@ -114,6 +114,7 @@ CREATE TABLE IF NOT EXISTS cron_jobs (
     last_status TEXT,            -- ok, failed, missed, unknown
     last_error TEXT,
     failure_streak INTEGER NOT NULL DEFAULT 0,
+    retries INTEGER NOT NULL DEFAULT 0,  -- unreachable-model retries used for the current slot
     created REAL NOT NULL,
     finished_at REAL
 );
@@ -130,7 +131,7 @@ CREATE TABLE IF NOT EXISTS cron_runs (
     finished REAL,
     session_id INTEGER,
     error TEXT,
-    delivery TEXT,               -- sent, silent, failed, none
+    delivery TEXT,               -- sent, silent, held (retrying), failed, none
     output TEXT,
     UNIQUE (job_id, slot)
 );
@@ -152,6 +153,7 @@ MIGRATIONS = {
                  ("guest", "INTEGER NOT NULL DEFAULT 0"),
                  # '' for conversations, 'cron' for a scheduled job's run
                  ("origin", "TEXT NOT NULL DEFAULT ''")],
+    "cron_jobs": [("retries", "INTEGER NOT NULL DEFAULT 0")],
 }
 
 USAGE_FIELDS = ("calls", "prompt", "completion", "cache_hit", "cache_miss")
@@ -574,7 +576,7 @@ class Store:
 
     JOB_COLS = ("id", "name", "prompt", "schedule", "repeat_times", "repeat_done", "catch_up", "state",
                 "next_run_at", "last_run_at", "last_status", "last_error", "failure_streak", "created",
-                "finished_at")
+                "finished_at", "retries")
     RUN_COLS = ("id", "job_id", "slot", "kind", "status", "pid", "claimed", "finished", "session_id",
                 "error", "delivery", "output")
 

@@ -26,6 +26,7 @@ class Recorder:
         if self.fail:
             raise OSError("network down")
         self.sent.append(text)
+        return len(self.sent)  # Telegram's message id
 
 
 class CronBase(unittest.TestCase):
@@ -203,6 +204,7 @@ class RunnerTests(CronBase):
         self.assertEqual(res.status, "failed")
         self.assertIn("Failed: The site is down.", self.out.sent[0])
         self.assertIn("Next try:", self.out.sent[0])
+        self.assertIn(f"remove job {j['id']}", self.out.sent[0])
         after = self.store.cron_job(j["id"])
         self.assertEqual((after["last_status"], after["failure_streak"]), ("failed", 1))
 
@@ -214,6 +216,94 @@ class RunnerTests(CronBase):
         self.assertEqual(res.status, "failed")
         self.assertIn("crashed: RuntimeError: boom", self.out.sent[-1])
         self.assertEqual(self.store.cron_run(res.run_id)["status"], "failed")
+
+    def test_recurring_message_says_when_next_and_how_to_stop(self):
+        j = self.job("every 1h", "Check the site")
+        self.store.cron_update(j["id"], next_run_at=T0 + 300)
+        self.fire(FakeModel([reply("Up.")]), job=j)
+        self.assertTrue(self.out.sent[0].startswith("[scheduled] Check the site\nUp.\n\nNext run: "))
+        self.assertTrue(self.out.sent[0].endswith(f"To stop this job, ask me to remove job {j['id']}."))
+        self.fire(FakeModel([reply("Tea.")]), job=self.job("in 5m", "Tea"))
+        self.assertEqual(self.out.sent[1], "[scheduled] Tea\nTea.")  # a one-shot has no next run
+
+    def test_no_message_id_is_not_delivered(self):
+        res = self.fire(FakeModel([reply("Done.")]), deliver=lambda text: None)
+        self.assertEqual((res.status, res.delivery), ("ok", "failed"))
+        self.assertEqual(self.store.cron_run(res.run_id)["delivery"], "failed")
+        self.assertEqual(cron.take_notes(self.store), "")  # nothing to remind the owner of
+
+    def test_delivered_messages_become_one_note_then_clear(self):
+        self.fire(FakeModel([reply("Battery 14%.")]), job=self.job("in 5m", "Battery"))
+        self.fire(FakeModel([reply("x" * 2000)]), job=self.job("in 5m", "Long"))
+        note = cron.take_notes(self.store)
+        self.assertTrue(note.startswith("[Scheduled-job messages Chelus sent the owner"))
+        self.assertIn("[scheduled] Battery\nBattery 14%.", note)
+        self.assertIn("[...]", note)
+        self.assertLess(len(note), 2000)
+        self.assertEqual(cron.take_notes(self.store), "")
+        for n in range(cron.NOTES_KEEP + 2):
+            cron.add_note(self.store, f"m{n}")
+        kept = cron.take_notes(self.store)
+        self.assertNotIn(":\nm1\n", kept)  # only the newest NOTES_KEEP stay
+        self.assertIn(":\nm6]", kept)
+
+    def test_streak_nudge_comes_once_at_three(self):
+        j = self.job("every 1h", "Check the site")
+        for n in range(1, 5):
+            self.store.cron_update(j["id"], next_run_at=T0 + 300 * n)
+            cron.fire(self.store, self.runner(FakeModel([reply("[CRON_FAILURE] down")])), j["id"], now=T0 + 300 * n + 1)
+            self.assertEqual("failures in a row" in self.out.sent[-1], n == 3, n)
+        self.assertEqual(self.store.cron_job(j["id"])["failure_streak"], 4)
+
+    def unreachable(self):
+        return provider.ProviderError("could not reach the API", retryable=True, transient=True)
+
+    def test_unreachable_model_retries_quietly_then_reports(self):
+        j = self.job("every day at 9am", "Morning check")
+        slot = local_epoch(2026, 10, 28, 9, 0)
+        regular_next = local_epoch(2026, 10, 29, 9, 0)
+        clock = [slot + 1]
+        with patch("chelus.cron.time.time", lambda: clock[0]):
+            for step, wait in enumerate(cron.RETRY_S):
+                res = cron.fire(self.store, self.runner(FakeModel([self.unreachable()])), j["id"], now=clock[0])
+                self.assertEqual((res.status, res.delivery), ("failed", "held"), step)
+                after = self.store.cron_job(j["id"])
+                self.assertEqual((after["next_run_at"], after["retries"], after["failure_streak"],
+                                  after["last_status"]), (clock[0] + wait, step + 1, 0, "retrying"))
+                clock[0] += wait
+            self.assertEqual(self.out.sent, [])  # every interim failure held back
+            res = cron.fire(self.store, self.runner(FakeModel([self.unreachable()])), j["id"], now=clock[0])
+        self.assertEqual(res.delivery, "sent")
+        self.assertIn("could not reach the API", self.out.sent[0])
+        self.assertIn("tried 4 times over about 50 minutes", self.out.sent[0])
+        after = self.store.cron_job(j["id"])
+        self.assertEqual((after["next_run_at"], after["retries"], after["failure_streak"], after["repeat_done"]),
+                         (regular_next, 0, 1, 1))
+        self.assertEqual(len(self.store.cron_runs(j["id"])), 4)
+
+    def test_retry_success_resets_and_counts_once(self):
+        j = self.job("every day at 9am", "Morning check", repeat=2)
+        slot = local_epoch(2026, 10, 28, 9, 0)
+        with patch("chelus.cron.time.time", lambda: slot + 1):
+            cron.fire(self.store, self.runner(FakeModel([self.unreachable()])), j["id"], now=slot + 1)
+        with patch("chelus.cron.time.time", lambda: slot + 302):
+            res = cron.fire(self.store, self.runner(FakeModel([reply("Fine.")])), j["id"], now=slot + 302)
+        self.assertEqual((res.status, res.delivery), ("ok", "sent"))
+        after = self.store.cron_job(j["id"])
+        self.assertEqual((after["retries"], after["repeat_done"], after["state"]), (0, 1, "scheduled"))
+
+    def test_no_retry_when_the_model_was_reached_or_for_one_shots(self):
+        j = self.job("every 1h", "Check")
+        self.store.cron_update(j["id"], next_run_at=T0 + 300)
+        reached = FakeModel([{"role": "assistant", "content": None, "_usage": {"prompt_tokens": 1},
+                              "tool_calls": [tool_call("battery_status", {})]}, self.unreachable()])
+        res = self.fire(reached, job=j)
+        self.assertEqual((res.status, res.delivery), ("failed", "sent"))  # something ran: no retry
+        self.assertEqual(self.store.cron_job(j["id"])["retries"], 0)
+        res = self.fire(FakeModel([self.unreachable()]), job=self.job("in 5m", "Once"))
+        self.assertEqual(res.delivery, "sent")  # one-shot: reported at once
+        res = cron.run_now(self.store, self.runner(FakeModel([self.unreachable()])), j["id"])
+        self.assertEqual(res.delivery, "sent")  # a manual run: reported at once
 
     def test_delivery_failure_is_not_a_job_failure(self):
         res = self.fire(FakeModel([reply("Done.")]), deliver=Recorder(fail=True))
@@ -321,6 +411,7 @@ class BridgeTests(CronBase):
             def call(self, method, params=None, wait=0):
                 if method == "sendMessage":
                     self.sent.append(params["text"])
+                    return {"message_id": len(self.sent)}
                 return []
 
         bot = Bot()
@@ -338,6 +429,33 @@ class BridgeTests(CronBase):
         with patch("chelus.curator.maybe_run", return_value=None):
             bridge.housekeeping()
         self.assertTrue(bot.sent and bot.sent[0].startswith("[scheduled] ding\nDing"))
+
+    def test_owner_next_turn_carries_what_jobs_sent(self):
+        from chelus import telegram
+        model = FakeModel([reply("On it."), reply("Sure.")])
+
+        class Factory(telegram.AgentFactory):
+            def __call__(self, user, approve, on_event, **kw):
+                a = super().__call__(user, approve, on_event, **kw)
+                a.chat_fn = model
+                return a
+
+        class Bot:
+            def call(self, method, params=None, wait=0):
+                return {"message_id": 7} if method == "sendMessage" else True
+
+        bridge = telegram.Bridge(self.s, Bot(), 42, Factory(self.s, "k", self.store, 42), log=self.lines.append)
+        bridge.cron = cron.Runner(self.s, "k", self.store, deliver=lambda text: bridge._send(42, text),
+                                  log=self.lines.append)
+        self.assertEqual(bridge.cron._send({"id": "j1"}, "[scheduled] water\nWater the plants."), "sent")
+        msg = {"chat": {"id": 42, "type": "private"}, "from": {"id": 42}}
+        bridge.handle(dict(msg, text="do it"))
+        first = model.calls[0][-1]["api_content"]
+        self.assertTrue(first.startswith("[Scheduled-job messages Chelus sent the owner"))
+        self.assertIn("Water the plants.]\n\ndo it\n\n[sent ", first)
+        self.assertEqual(model.calls[0][-1]["content"], "do it")  # the history shows what was typed
+        bridge.handle(dict(msg, text="and again"))
+        self.assertTrue(model.calls[1][-1]["api_content"].startswith("and again\n\n[sent "))
 
 
 if __name__ == "__main__":

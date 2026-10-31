@@ -240,9 +240,14 @@ class Bridge:
         chunks.append((text or "(empty)")[start:] + suffix)
         return chunks
 
-    def _send(self, chat_id: int, text: str, *, decorate: bool = True, **extra: Any) -> None:
+    def _send(self, chat_id: int, text: str, *, decorate: bool = True, **extra: Any) -> int | None:
+        """Send text in as many pieces as it needs. Returns the last piece's message id, or None
+        if Telegram didn't return one."""
+        message_id = None
         for chunk in self._payloads(chat_id, text, decorate=decorate):
-            self.bot.call("sendMessage", {"chat_id": chat_id, "text": chunk, **extra})
+            sent = self.bot.call("sendMessage", {"chat_id": chat_id, "text": chunk, **extra})
+            message_id = sent.get("message_id") if isinstance(sent, dict) else None
+        return message_id
 
     # ---- update intake -------------------------------------------------
 
@@ -530,6 +535,12 @@ class Bridge:
         api_text, step_limit = None, None
         if command == "/learn":
             api_text, step_limit = learn.build_prompt(arg), LEARN_STEPS
+        if is_owner and self.cron is not None:
+            # What scheduled jobs sent since the owner last wrote rides in this message, so a
+            # reply like "do it" to a reminder has context. The prompt prefix stays untouched.
+            notes = cron.take_notes(self.cron.store)
+            if notes:
+                api_text = f"{notes}\n\n{api_text or text}"
 
         def on_event(kind: str, detail: str) -> None:
             if kind in ("retry", "wait", "guard", "notice"):

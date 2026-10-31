@@ -24,6 +24,7 @@ manages jobs from the terminal.
 
 from __future__ import annotations
 
+import json
 import secrets
 import sqlite3
 import time
@@ -44,6 +45,10 @@ KEEP_DONE_S = 7 * 86400     # finished one-shots stay listed this long
 OUTPUT_CHARS = 8000         # kept per run, for the owner and for later job chaining
 NAME_CHARS = 60
 OFF_TOOLS = ("memory", "cron")  # memory is read-only in a run; a job can't schedule jobs
+RETRY_S = (300, 900, 1800)  # unreachable model, nothing got through: try again after these (Hermes)
+NUDGE_AT = 3                # failures in a row before the notice suggests pausing the job
+NOTES_KEY = "cron_notes"    # meta: messages sent since the owner last wrote, for their next turn
+NOTES_KEEP, NOTE_CHARS = 5, 800
 
 SILENT_MARKERS = ("[SILENT]", "SILENT", "NO_REPLY")
 FAILURE_MARKER = "[CRON_FAILURE]"
@@ -262,9 +267,13 @@ class Result:
     delivery: str = "none"
     error: str = ""
     denied: list[str] = field(default_factory=list)
+    unreachable: bool = False    # the model was away and no call got through: safe to retry
+    retry_at: float | None = None
 
 
-Deliver = Callable[[str], None]  # sends one message to the owner; raises if it can't
+# Sends one message to the owner and returns Telegram's message id. Raises, or returns None,
+# when it can't; only a returned id counts as delivered.
+Deliver = Callable[[str], Any]
 
 
 class Runner:
@@ -283,6 +292,7 @@ class Runner:
         sid: int | None = None
         reply = ""
         started = self.clock()
+        calls_ok = 0
 
         def approve(req: str) -> str:
             res.denied.append(getattr(req, "title", "") or str(req))
@@ -290,6 +300,9 @@ class Runner:
             return approval.DENY
 
         def on_event(event: str, detail: str) -> None:
+            nonlocal calls_ok
+            if event == "usage":
+                calls_ok += 1
             if event in ("retry", "wait", "guard", "notice", "denied"):
                 self.log(f"[cron] {job['id']} {event}: {detail}")
             if event in ("tool", "usage") and self.clock() - started > RUN_LIMIT_S:
@@ -310,14 +323,37 @@ class Runner:
                 res.error = res.text.splitlines()[0][:300] if res.text else "the job reported a failure"
         except (provider.ProviderError, SessionBusy) as e:
             res.error = str(e)
+            res.unreachable = getattr(e, "transient", False) and calls_ok == 0
         except Exception as e:  # a crash in one job must not stop the bridge or the other jobs
             res.error = f"crashed: {type(e).__name__}: {e}"
             self.log(f"[cron] {job['id']} crashed:\n{traceback.format_exc()}")
-        message = self._message(job, kind, res)
-        res.delivery = self._send(job, message) if message else "silent"
-        res.text = message or res.text
+        res.retry_at = self._retry_at(job, kind, res)
+        if res.retry_at is not None:  # hold the notice back; the retry speaks if it fails too
+            res.delivery = "held"
+            self.log(f"[cron] {job['id']}: model unreachable ({res.error}); "
+                     f"retrying {schedule.describe(res.retry_at)}")
+        else:
+            message = self._message(job, kind, res)
+            res.delivery = self._send(job, message) if message else "silent"
+            res.text = message or res.text
         self._finish(job, res, sid, reply)
         return res
+
+    def _retry_at(self, job: dict[str, Any], kind: str, res: Result) -> float | None:
+        """When to retry a run that never reached the model, or None. Only scheduled recurring
+        runs, at most len(RETRY_S) times per slot, and never past the job's next regular run."""
+        if not res.unreachable or kind == "manual" or not schedule.recurring(job["schedule"] or {}):
+            return None
+        current = self.store.cron_job(job["id"])
+        if current is None or current["state"] != "scheduled":
+            return None
+        step = int(current["retries"] or 0)
+        if step >= len(RETRY_S):
+            return None
+        at = time.time() + RETRY_S[step]
+        if current["next_run_at"] is not None and at >= current["next_run_at"]:
+            return None
+        return at
 
     def _message(self, job: dict[str, Any], kind: str, res: Result) -> str:
         """The owner's message, or "" for a silent success. Failures always speak."""
@@ -326,27 +362,44 @@ class Runner:
             label += " (ran late: the phone or Chelus was asleep or off at the scheduled time)"
         if res.status == "silent":
             return ""
+        current = self.store.cron_job(job["id"]) or {}
+        nxt = current.get("next_run_at") if current.get("state") == "scheduled" else None
         if res.status == "failed":
             body = f"{label}\nFailed: {res.error}"
-            nxt = (self.store.cron_job(job["id"]) or {}).get("next_run_at")
-            if nxt:
-                body += f"\nNext try: {schedule.describe(nxt)}."
+            retries = int(current.get("retries") or 0)
+            if retries and res.unreachable:
+                body += f"\nThe model was unreachable; Chelus tried {retries + 1} times over about " \
+                        f"{sum(RETRY_S[:retries]) // 60} minutes."
         else:
             body = f"{label}\n{res.text}"
         if res.denied:
             body += ("\n\nDenied, because nobody was there to approve: " + "; ".join(dict.fromkeys(res.denied))
                      + ". To let this job do it, run the same action once in chat and choose 'Always'.")
+        if res.status == "failed" and current and int(current.get("failure_streak") or 0) + 1 == NUDGE_AT:
+            body += (f"\n\nThat's {NUDGE_AT} failures in a row. If it keeps failing, pause the job or fix its "
+                     "prompt; ask me and I'll do it.")
+        if nxt:
+            body += (f"\n\n{'Next try' if res.status == 'failed' else 'Next run'}: {schedule.describe(nxt)}. "
+                     f"To stop this job, ask me to remove job {job['id']}.")
         return body
 
     def _send(self, job: dict[str, Any], message: str) -> str:
+        """sent only when Telegram returned a message id; failed is not a job failure."""
         if self.deliver is None:
             return "none"
         try:
-            self.deliver(message)
-            return "sent"
-        except Exception as e:  # delivery has its own status; it is not a job failure
+            message_id = self.deliver(message)
+        except Exception as e:
             self.log(f"[cron] {job['id']}: could not deliver: {type(e).__name__}: {e}")
             return "failed"
+        if not message_id:
+            self.log(f"[cron] {job['id']}: delivery not confirmed: no message id came back")
+            return "failed"
+        try:
+            add_note(self.store, message)
+        except sqlite3.Error as e:
+            self.log(f"[cron] {job['id']}: could not note the delivery for the next turn: {e}")
+        return "sent"
 
     def _finish(self, job: dict[str, Any], res: Result, sid: int | None, reply: str) -> None:
         status = "ok" if res.status in ("ok", "silent") else "failed"
@@ -354,12 +407,53 @@ class Runner:
             self.store.cron_finish_run(res.run_id, status=status, session_id=sid, error=res.error or None,
                                        delivery=res.delivery, output=(reply or "")[:OUTPUT_CHARS])
             current = self.store.cron_job(job["id"])
-            if current is not None:
-                streak = 0 if status == "ok" else int(current["failure_streak"] or 0) + 1
-                self.store.cron_update(job["id"], last_run_at=time.time(), last_status=status,
-                                       last_error=res.error or None, failure_streak=streak)
+            if current is None:
+                return
+            if res.retry_at is not None:
+                # The held attempt doesn't count: not against the streak, not against repeat.
+                self.store.cron_update(job["id"], next_run_at=res.retry_at, last_run_at=time.time(),
+                                       last_status="retrying", last_error=res.error or None,
+                                       retries=int(current["retries"] or 0) + 1,
+                                       repeat_done=max(0, int(current["repeat_done"] or 0) - 1))
+                return
+            streak = 0 if status == "ok" else int(current["failure_streak"] or 0) + 1
+            self.store.cron_update(job["id"], last_run_at=time.time(), last_status=status,
+                                   last_error=res.error or None, failure_streak=streak, retries=0)
         except sqlite3.Error as e:
             self.log(f"[cron] {job['id']}: could not record the run: {e}")
+
+
+# ---- notes for the owner's next turn ----
+
+def add_note(store: Store, message: str, now: float | None = None) -> None:
+    """Remember a delivered message so the owner's next chat turn carries it (Hermes's
+    attach_to_session): a reply of "do it" to a reminder then has something to refer to."""
+    try:
+        notes = json.loads(store.meta(NOTES_KEY) or "[]")
+    except ValueError:
+        notes = []
+    text = message if len(message) <= NOTE_CHARS else message[:NOTE_CHARS] + " [...]"
+    notes.append({"at": time.time() if now is None else now, "text": text})
+    store.set_meta(NOTES_KEY, json.dumps(notes[-NOTES_KEEP:]))
+
+
+def take_notes(store: Store) -> str:
+    """The pending notes as one block for the front of the owner's next message, and clear
+    them. "" when there are none or they can't be read."""
+    try:
+        raw = store.meta(NOTES_KEY)
+        if not raw:
+            return ""
+        store.set_meta(NOTES_KEY, "[]")
+        notes = json.loads(raw)
+    except (sqlite3.Error, ValueError):
+        return ""
+    parts = [f"At {time.strftime('%Y-%m-%d %H:%M', time.localtime(n['at']))}:\n{n['text']}"
+             for n in notes if isinstance(n, dict) and n.get("text")]
+    if not parts:
+        return ""
+    return ("[Scheduled-job messages Chelus sent the owner since their last message, for context:\n\n"
+            + "\n\n".join(parts) + "]")
 
 
 def _read_reply(reply: str) -> tuple[str, str]:
