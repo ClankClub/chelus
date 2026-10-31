@@ -6,7 +6,7 @@ import argparse
 import sys
 import time
 
-from . import __version__, approval, curator, learn, memory, provider, review, skill_tools, skills
+from . import __version__, approval, curator, jobs, learn, memory, provider, review, skill_tools, skills
 from .agent import LEARN_STEPS, Agent
 from .config import ConfigError, Settings, load_api_key, load_settings
 from .store import SessionBusy, Store
@@ -95,6 +95,14 @@ def cmd_chat(s: Settings, args: argparse.Namespace) -> int:
             api_text, steps = None, None
             if line == "/learn" or line.startswith("/learn "):
                 api_text, steps = learn.build_prompt(line[len("/learn"):]), LEARN_STEPS
+            # Background shell runs that ended since the last turn: shown here, and carried
+            # in this message so the model knows (the bridge sends these on Telegram instead).
+            done = jobs.collect(s)
+            for text in done:
+                print(text)
+            if done:
+                api_text = ("[Background shell runs that ended since the owner's last message:\n\n"
+                            + "\n\n".join(done) + "]\n\n" + (api_text or line))
             try:
                 reply = agent.run_turn(line, api_text=api_text, step_limit=steps)
             except KeyboardInterrupt:

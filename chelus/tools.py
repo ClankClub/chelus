@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
-from . import approval
+from . import approval, jobs
 from .config import Settings
 
 
@@ -239,17 +239,43 @@ def run_bounded(argv: list[str], cwd: str, timeout: float, limit: int = 65536,
             buffers[proc.stderr].decode("utf-8", errors="replace"), exceeded)
 
 
+def shell_mode(s: Settings, args: dict[str, Any]) -> tuple[bool, float]:
+    """(background, timeout) for a run_shell call. A timeout past the foreground limit
+    sends the command to the background instead of being refused (Hermes does the same)."""
+    asked = _int_arg(args, "timeout", 1)
+    flag = args.get("background")
+    if flag not in (None, True, False, "true", "false"):
+        raise ToolError("background must be true or false")
+    background = flag in (True, "true") or (asked is not None and asked > s.shell_timeout)
+    if background:
+        return True, float(jobs.LIMIT_S)
+    return False, float(min(asked or s.shell_timeout, s.shell_timeout))
+
+
 def _run_shell(s: Settings, args: dict[str, Any], ctx: Any = None) -> str:
     command = args.get("command")
     if not isinstance(command, str) or not command.strip():
         raise ToolError("command must be a non-empty string")
+    background, timeout = shell_mode(s, args)
+    if background:
+        if getattr(ctx, "guest", False):
+            raise ToolError("background runs are for the owner only")
+        purpose = args.get("purpose") if isinstance(args.get("purpose"), str) else ""
+        try:
+            job = jobs.start(s, command, purpose)
+        except jobs.JobError as e:
+            raise ToolError(str(e)) from None
+        return (f"started background job {job['id']} (stopped after {jobs.LIMIT_S // 60} minutes if still "
+                "running). The owner gets a message when it ends, and so do you on their next turn. Don't "
+                f"wait or poll in a loop: check it with shell_jobs action=log id={job['id']} only if needed now.")
     shell = shutil.which("bash") or shutil.which("sh") or "/system/bin/sh"
     limit = 65536
     # Own process group, so a timeout or Ctrl-C kills the command and anything it spawned.
     try:
-        code, out, err, exceeded = run_bounded([shell, "-c", command], s.workdir, s.shell_timeout, limit)
+        code, out, err, exceeded = run_bounded([shell, "-c", command], s.workdir, timeout, limit)
     except subprocess.TimeoutExpired:
-        raise ToolError(f"command timed out after {s.shell_timeout:g}s and was killed") from None
+        raise ToolError(f"command timed out after {timeout:g}s and was killed. If it needs longer, run it "
+                        "again with background=true.") from None
     if exceeded:
         parts = [f"error: shell output exceeded {limit} bytes; process group stopped",
                  f"exit code {code}"]
@@ -294,6 +320,21 @@ def _battery_status(s: Settings, args: dict[str, Any], ctx: Any = None) -> str:
     return json.dumps({k: data[k] for k in keep if k in data})
 
 
+def _shell_jobs(s: Settings, args: dict[str, Any], ctx: Any = None) -> str:
+    action = args.get("action") or "list"
+    try:
+        if action == "list":
+            return jobs.listing(s)
+        if action == "log":
+            return jobs.log_text(s, args.get("id"))
+        if action == "kill":
+            job = jobs.kill(s, args.get("id"))
+            return f"job {job['id']}: {jobs.describe(job)}"
+    except jobs.JobError as e:
+        raise ToolError(str(e)) from None
+    raise ToolError("action must be list, log or kill")
+
+
 def obj(props: dict[str, Any], required: list[str]) -> dict[str, Any]:
     return {"type": "object", "properties": props, "required": required}
 
@@ -336,10 +377,26 @@ TOOLS: dict[str, Tool] = {
         ),
         Tool(
             "run_shell",
-            "Run a shell command in Termux on the phone, with a timeout. Asks the owner first.",
-            obj({"command": {"type": "string"}, "purpose": PURPOSE}, ["command", "purpose"]),
+            "Run a shell command in Termux on the phone. Asks the owner first. Waits up to 120 seconds "
+            "by default. For anything slower (package installs, deploys, big downloads) set "
+            "background=true: it returns a job id at once, runs up to 30 minutes, and the owner is told "
+            "when it ends.",
+            obj({"command": {"type": "string"},
+                 "timeout": {"type": "integer", "description": (
+                     "Seconds to wait (default and most 120). More than that runs it in the background.")},
+                 "background": {"type": "boolean", "description": "Run without waiting; see shell_jobs."},
+                 "purpose": PURPOSE}, ["command", "purpose"]),
             _run_shell,
             risky=True,
+        ),
+        Tool(
+            "shell_jobs",
+            "Background shell runs started with run_shell background=true. list: recent jobs and their "
+            "state. log: a job's output so far. kill: stop a running job.",
+            obj({"action": {"type": "string", "enum": ["list", "log", "kill"]},
+                 "id": {"type": "string", "description": "Job id, for log and kill."}}, ["action"]),
+            _shell_jobs,
+            group="shell_jobs",
         ),
         Tool(
             "battery_status",
@@ -355,7 +412,7 @@ def register(tool: Tool) -> None:
     TOOLS[tool.name] = tool
 
 
-OWNER_GROUPS = ("skills", "memory", "cron", "web")
+OWNER_GROUPS = ("skills", "memory", "cron", "web", "shell_jobs")
 
 
 def available(guest: bool = False, disabled: tuple[str, ...] = ()) -> list[str]:
@@ -374,7 +431,7 @@ def action_key(s: Settings, name: str, args: dict[str, Any], ctx: Any = None) ->
         command = args.get("command")
         if not isinstance(command, str) or not command.strip():
             raise ToolError("command must be a non-empty string")
-        effect.update(command=command, timeout=s.shell_timeout)
+        effect.update(command=command, background=shell_mode(s, args)[0])
     elif name == "write_file":
         path = _resolve(s, args.get("path"), ctx)
         content = args.get("content")
@@ -387,12 +444,22 @@ def action_key(s: Settings, name: str, args: dict[str, Any], ctx: Any = None) ->
     return hashlib.sha256(json.dumps(effect, sort_keys=True, ensure_ascii=True).encode()).hexdigest()
 
 
-def describe_call(name: str, args: dict[str, Any]) -> approval.Request:
+def describe_call(name: str, args: dict[str, Any], s: Settings | None = None) -> approval.Request:
     """What a permission prompt shows: a title written here, the model's stated purpose,
     and the facts (command, path, size). As a string, the old one-line summary."""
     purpose = args.get("purpose") if isinstance(args.get("purpose"), str) else ""
     if name == "run_shell":
         cmd = str(args.get("command"))
+        try:
+            background = shell_mode(s or Settings(), args)[0]
+        except ToolError:
+            background = False  # the handler refuses the bad argument after the prompt
+        if background:
+            return approval.Request(
+                f"run_shell (background): {cmd!r}", title="Run a shell command on the phone in the background",
+                purpose=purpose, detail=(f"Command:\n{cmd}\n\nRuns in the background for up to "
+                                         f"{jobs.LIMIT_S // 60} minutes. You get a message when it ends."),
+                choices=(approval.ONCE, approval.SESSION, approval.ALWAYS, approval.DENY))
         return approval.Request(f"run_shell: {cmd!r}", title="Run a shell command on the phone",
                                 purpose=purpose, detail=f"Command:\n{cmd}",
                                 choices=(approval.ONCE, approval.SESSION, approval.ALWAYS, approval.DENY))

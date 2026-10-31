@@ -23,7 +23,7 @@ import urllib.request
 from collections import deque
 from typing import Any
 
-from . import approval, cron, curator, learn, memory, provider, review, skill_tools, skills
+from . import approval, cron, curator, jobs, learn, memory, provider, review, skill_tools, skills
 from .agent import LEARN_STEPS, Agent
 from .config import ConfigError, Settings, load_api_key
 from .stats import RuntimeStats, StatsPreferences
@@ -32,6 +32,7 @@ from .store import SessionBusy, Store
 API = "https://api.telegram.org"
 MAX_TEXT = 4000            # Telegram's limit is 4096 characters; leave room
 MAX_IMAGE_BYTES = 10 * 1024 * 1024  # Bound Telegram download and base64 request size
+JOB_CHECK_SECONDS = 15     # poll wait while a background shell run is going
 POLL_SECONDS = 50          # long-poll wait on Telegram's side
 APPROVAL_SECONDS = 180     # unanswered approval requests count as "no"
 CARD_DETAIL = 2500         # longest diff or command shown on an approval card
@@ -623,6 +624,11 @@ class Bridge:
                 cron.tick(self.cron.store, self.cron)
             except Exception as e:  # the scheduler must never take the bridge down
                 self.log(f"[telegram] cron tick failed: {type(e).__name__}: {e}")
+            try:  # background shell runs that ended: tell the owner once, and keep a note
+                jobs.notify(self.s, lambda text: self._send(self.owner, text),
+                            note=lambda text: cron.add_note(self.cron.store, text), log=self.log)
+            except Exception as e:
+                self.log(f"[telegram] background job check failed: {type(e).__name__}: {e}")
         report = curator.maybe_run(self.s, self.make_agent.store, time.monotonic() - self.last_activity)
         if report:
             self.log(f"[telegram] {report}")
@@ -639,6 +645,8 @@ class Bridge:
             return POLL_SECONDS
         try:
             due = cron.seconds_until_due(self.cron.store)
+            if jobs.any_running(self.s):  # a background run's end is noticed within this
+                due = min(due if due is not None else JOB_CHECK_SECONDS, JOB_CHECK_SECONDS)
         except Exception:
             return POLL_SECONDS
         return POLL_SECONDS if due is None else max(1, min(POLL_SECONDS, math.ceil(due)))

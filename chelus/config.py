@@ -70,7 +70,8 @@ class Settings:
     max_iterations: int = 8
     # Longer tool output is saved to a file the model pages with read_file (spill.py).
     tool_output_chars: int = 6000
-    shell_timeout: float = 30.0
+    # run_shell's foreground limit and default. A longer run goes to the background (jobs.py).
+    shell_timeout: float = 120.0
     read_file_bytes: int = 65536  # no longer used (read_file pages by lines); old configs still load
     # web_fetch and web_search (owner only, no approval; web.py). web_chars is how much of a
     # page the model sees at once; the rest is saved for paging.

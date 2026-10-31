@@ -745,7 +745,7 @@ class Agent:
         limit = tool.max_output or self.s.tool_output_chars
         if self.guest or not tool.spill:
             return _clip(out, limit)
-        return spill.fit(self.s, name, out, limit, redact=(name == "run_shell"))
+        return spill.fit(self.s, name, out, limit, redact=(name in ("run_shell", "shell_jobs")))
 
     def _already_shown(self, out: str) -> bool:
         """True if this exact tool result is already in what the model sees."""
@@ -769,7 +769,7 @@ class Agent:
                 key = tools.action_key(self.s, name, args, self)
             except (tools.ToolError, OSError) as e:
                 return f"error: {e}", True
-        summary = tools.describe_call(name, args)
+        summary = tools.describe_call(name, args, self.s)
         choice = approval.ONCE
         if tool.risky:
             if reusable and self.store.tool_granted(key, self.session_id):
@@ -787,7 +787,8 @@ class Agent:
         self.tools_started.append(name)
         try:
             out = tool.handler(self.s, args, self)
-            failed = (name == "run_shell" and not out.startswith("exit code 0")) or out.startswith("denied:")
+            failed = ((name == "run_shell" and not out.startswith(("exit code 0", "started background job")))
+                      or out.startswith("denied:"))
             if not out.startswith("denied:"):
                 self.tools_ok.append(name)
         except (tools.ToolError, OSError) as e:
