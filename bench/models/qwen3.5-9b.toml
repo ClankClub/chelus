@@ -1,4 +1,5 @@
 # Small dense Qwen via OpenRouter: how far down does Chelus still work?
+# $0.17 in / $0.25 out per million: pricier than GPT-OSS despite being smaller.
 provider = "openai"
 base_url = "https://openrouter.ai/api/v1"
 model = "qwen/qwen3.5-9b"

@@ -38,6 +38,21 @@ class BenchFilesTests(unittest.TestCase):
                 if sc.get("role") not in (None, "owner", "guest"):
                     self.fail(f"bad role {sc['role']}")
 
+    def test_cost_counts_the_providers_charge_under_byok(self):
+        # Real usage blocks from OpenRouter, 2026-11-01: DeepSeek through the owner's own key
+        # reports cost 0 and the DeepSeek charge only under cost_details.
+        byok = {"cost": 0, "is_byok": True, "cost_details": {"upstream_inference_cost": 5.88e-05}}
+        plain = {"cost": 1.669e-06, "is_byok": False, "cost_details": {"upstream_inference_cost": 1.669e-06}}
+        self.assertAlmostEqual(sim.charge(byok), 5.88e-05)
+        self.assertAlmostEqual(sim.charge(plain), 1.669e-06)
+        self.assertIsNone(sim.charge({"prompt_tokens": 3}))
+
+    def test_deepseek_cost_is_estimated_from_its_cache_fields(self):
+        price = sim.PRICES["deepseek-flash"]
+        usage = {"prompt_tokens": 1_000_000, "prompt_cache_hit_tokens": 900_000, "completion_tokens": 100_000}
+        expected = 0.9 * price["input_cache_hit"] + 0.1 * price["input_cache_miss"] + 0.1 * price["output"]
+        self.assertAlmostEqual(sim.estimate(usage, price), expected)
+
     def test_checks_score_a_recorded_run(self):
         with tempfile.TemporaryDirectory() as d:
             s = Settings(workdir=d)

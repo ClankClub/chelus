@@ -32,6 +32,7 @@ BENCH = Path(__file__).resolve().parent
 MODELS = BENCH / "models"
 SCENARIOS = BENCH / "scenarios"
 STARTER_SKILLS = BENCH.parent / "skills"
+PRICES = tomllib.loads((BENCH / "prices.toml").read_text(encoding="utf-8"))
 DONE = "[DONE]"
 
 OWNER_SYSTEM = """You are role-playing the owner of Chelus, a personal AI agent that runs on an \
@@ -62,10 +63,10 @@ def load_profile(name: str) -> dict[str, Any]:
     return tomllib.loads(path.read_text(encoding="utf-8"))
 
 
-def side_settings(profile: str) -> tuple[Settings, str]:
-    """Settings and key for the simulated owner or the judge: no tools, no state."""
+def side_settings(profile: str) -> tuple[Settings, str, dict | None]:
+    """Settings, key and price table for the simulated owner or the judge: no tools, no state."""
     s = Settings(**load_profile(profile))
-    return s, load_api_key(s)
+    return s, load_api_key(s), PRICES.get(profile)
 
 
 def load_scenarios(spec: str) -> list[dict[str, Any]]:
@@ -94,7 +95,12 @@ class Run:
     asked: list[str] = field(default_factory=list)              # approval cards shown
     prompt_tokens: int = 0
     completion_tokens: int = 0
-    cost: float = 0.0
+    cost: float = 0.0            # the agent's model calls only, in USD
+    side_cost: float = 0.0       # the simulated owner and the judge
+    cached_tokens: int = 0
+    reasoning_tokens: int = 0
+    unpriced_calls: int = 0      # calls with no reported cost and no price table
+    estimated: bool = False      # some cost came from bench/prices.toml, not the API
     model_calls: int = 0
     seconds: float = 0.0
     checks: list[dict[str, Any]] = field(default_factory=list)
@@ -133,10 +139,36 @@ def fresh_home(root: Path, profile: dict[str, Any], scenario: dict[str, Any]) ->
     return load_settings()
 
 
+def estimate(usage: dict[str, Any], price: dict[str, float]) -> float:
+    """Cost from token counts and a price table (USD per million tokens)."""
+    prompt = int(usage.get("prompt_tokens") or 0)
+    hit = usage.get("prompt_cache_hit_tokens")  # DeepSeek's names
+    if hit is None:
+        hit = (usage.get("prompt_tokens_details") or {}).get("cached_tokens") or 0
+    hit = int(hit)
+    out = int(usage.get("completion_tokens") or 0)
+    return (hit * price["input_cache_hit"] + (prompt - hit) * price["input_cache_miss"] + out * price["output"]) / 1e6
+
+
+def charge(usage: dict[str, Any]) -> float | None:
+    """What a call cost in USD. With bring-your-own-key routing OpenRouter's usage.cost is only
+    its own fee (often 0) and the provider's charge is in cost_details.upstream_inference_cost,
+    so that wins when present. None when the API reports no cost (DeepSeek direct, llama-server)."""
+    upstream = (usage.get("cost_details") or {}).get("upstream_inference_cost")
+    if upstream is not None:
+        return float(upstream) + (float(usage.get("cost") or 0) if usage.get("is_byok") else 0.0)
+    return float(usage["cost"]) if usage.get("cost") is not None else None
+
+
 RESULT_CHARS = 8000  # of each tool result kept for the judge (the model sees up to web_chars = 8000)
 
 
-def recording_chat(run: Run):
+def side_charge(usage: dict[str, Any], price: dict | None) -> float:
+    cost = charge(usage)
+    return cost if cost is not None else (estimate(usage, price) if price else 0.0)
+
+
+def recording_chat(run: Run, price: dict | None):
     def chat(s, key, messages, *args, **kw):
         # Tool results reach the model as role "tool" messages on the next call: attach them
         # to the calls that produced them.
@@ -149,7 +181,16 @@ def recording_chat(run: Run):
         usage = msg.get("_usage") or {}
         run.prompt_tokens += int(usage.get("prompt_tokens") or 0)
         run.completion_tokens += int(usage.get("completion_tokens") or 0)
-        run.cost += float(usage.get("cost") or 0)  # OpenRouter reports the charge here
+        run.cached_tokens += int(usage.get("prompt_cache_hit_tokens")
+                                 or (usage.get("prompt_tokens_details") or {}).get("cached_tokens") or 0)
+        run.reasoning_tokens += int((usage.get("completion_tokens_details") or {}).get("reasoning_tokens") or 0)
+        cost = charge(usage)
+        if cost is None and price:
+            cost, run.estimated = estimate(usage, price), True
+        if cost is None:
+            run.unpriced_calls += 1
+        else:
+            run.cost += cost
         for tc in msg.get("tool_calls") or []:
             try:
                 args_ = json.loads(tc["function"]["arguments"] or "{}")
@@ -169,7 +210,7 @@ def approver(run: Run, policy: str):
     return approve
 
 
-def owner_says(s: Settings, key: str, scenario: dict[str, Any], run: Run) -> str:
+def owner_says(s: Settings, key: str, price: dict | None, scenario: dict[str, Any], run: Run) -> str:
     owner = scenario["owner"]
     system = OWNER_SYSTEM.format(persona=owner.get("persona", "the phone's owner"),
                                  goal=owner["goal"], done=DONE)
@@ -179,7 +220,7 @@ def owner_says(s: Settings, key: str, scenario: dict[str, Any], run: Run) -> str
         msgs.append({"role": "assistant", "content": t["user"]})
         msgs.append({"role": "user", "content": t["reply"] or f"[no reply: {t['error']}]"})
     msg = provider.chat(s, key, msgs, [])
-    run.cost += float((msg.get("_usage") or {}).get("cost") or 0)
+    run.side_cost += side_charge(msg.get("_usage") or {}, price)
     return (msg.get("content") or DONE).strip()
 
 
@@ -192,7 +233,7 @@ def run_scenario(scenario: dict[str, Any], model: str, home: Path,
     started = time.monotonic()
     try:
         agent = Agent(s, key, store, store.new_session(), approver(run, scenario.get("approve", "once")),
-                      lambda kind, text: run.events.append((kind, text)), chat_fn=recording_chat(run),
+                      lambda kind, text: run.events.append((kind, text)), chat_fn=recording_chat(run, PRICES.get(model)),
                       hard_stop=True, guest=scenario.get("role") == "guest")
         script = list(scenario.get("turns", []))
         limit = scenario.get("max_turns", max(len(script), 1))
@@ -263,7 +304,7 @@ def check(c: dict[str, Any], run: Run, s: Settings) -> dict[str, Any]:
     return {"label": label, "pass": bool(ok), "why": ""}
 
 
-def judge(run: Run, scenario: dict[str, Any], s: Settings, key: str) -> None:
+def judge(run: Run, scenario: dict[str, Any], s: Settings, key: str, price: dict | None) -> None:
     criteria = [c["criterion"] for c in scenario.get("check", []) if c["kind"] == "judge"]
     if not criteria:
         return
@@ -272,7 +313,7 @@ def judge(run: Run, scenario: dict[str, Any], s: Settings, key: str) -> None:
     try:
         msg = provider.chat(s, key, [{"role": "system", "content": JUDGE_SYSTEM},
                                      {"role": "user", "content": prompt}], [])
-        run.cost += float((msg.get("_usage") or {}).get("cost") or 0)
+        run.side_cost += side_charge(msg.get("_usage") or {}, price)
         text = msg.get("content") or ""
         verdicts = json.loads(text[text.index("["):text.rindex("]") + 1])
     except Exception as e:
@@ -306,7 +347,9 @@ def transcript(run: Run, scenario: dict[str, Any], for_judge: bool = False) -> s
         lines += [f"- {'PASS' if c['pass'] else 'FAIL'} {c['label']}{(' - ' + c['why']) if c['why'] else ''}"
                   for c in run.checks]
         lines.append(f"\n{run.model_calls} model calls, {len(run.calls)} tool calls, {run.prompt_tokens} in / "
-                     f"{run.completion_tokens} out tokens, ${run.cost:.4f}, {run.seconds:.0f}s")
+                     f"{run.completion_tokens} out tokens ({run.cached_tokens} in cached, {run.reasoning_tokens} out reasoning), "
+                     f"agent ${run.cost:.4f}{' (estimated from bench/prices.toml)' if run.estimated else ''}{f' ({run.unpriced_calls} calls unpriced)' if run.unpriced_calls else ''}, "
+                     f"owner and judge ${run.side_cost:.4f}, {run.seconds:.0f}s")
         notable = [f"{k}: {v}" for k, v in run.events if k in ("guard", "denied", "notice", "retry", "wait")]
         if notable:
             lines.append("\n## Agent notices\n")
@@ -318,8 +361,10 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="sim", description=__doc__.splitlines()[0])
     ap.add_argument("--models", default="gpt-oss-20b", help="comma-separated profiles from bench/models")
     ap.add_argument("--scenarios", default="all", help="comma-separated names from bench/scenarios, or all")
-    ap.add_argument("--owner", default="haiku-5.5", help="profile for the simulated owner")
-    ap.add_argument("--judge", default="haiku-5.5", help="profile for the judge (none to skip)")
+    ap.add_argument("--owner", default="gpt-oss-120b", help="profile for the simulated owner")
+    ap.add_argument("--judge", default="deepseek-flash", help="profile for the judge (none to skip)")
+    ap.add_argument("--max-cost", type=float, default=0.25,
+                    help="stop starting runs once this much USD (agents, owner and judge) is spent")
     ap.add_argument("--repeat", type=int, default=1)
     ap.add_argument("--out", default="/out")
     ap.add_argument("--state", default="/state/runs")
@@ -334,20 +379,24 @@ def main(argv: list[str] | None = None) -> int:
     out = Path(a.out) / time.strftime("%Y%m%d-%H%M%S")
     out.mkdir(parents=True)
     results: list[Run] = []
-    for sc in scenarios:
-        for m in models:
-            for r in range(a.repeat):
-                tag = f"{sc['name']} / {m}" + (f" #{r + 1}" if a.repeat > 1 else "")
-                print(f"running {tag} ...", flush=True)
-                name = f"{sc['name']}--{m}" + (f"--{r + 1}" if a.repeat > 1 else "")
-                run = run_scenario(sc, m, Path(a.state) / out.name / name, owner)
-                if jud:
-                    judge(run, sc, *jud)
-                (out / f"{name}.md").write_text(transcript(run, sc), encoding="utf-8")
-                (out / f"{name}.json").write_text(json.dumps(run.__dict__, indent=1, default=str), encoding="utf-8")
-                print(f"  {run.passed}/{len(run.checks)} checks, {len(run.calls)} tool calls, "
-                      f"${run.cost:.4f}, {run.seconds:.0f}s{'  ERROR ' + run.error if run.error else ''}", flush=True)
-                results.append(run)
+    jobs_ = [(sc, m, r) for sc in scenarios for m in models for r in range(a.repeat)]
+    for sc, m, r in jobs_:
+        spent = sum(x.cost + x.side_cost for x in results)
+        if spent >= a.max_cost:
+            print(f"stopping: ${spent:.4f} spent, over --max-cost ${a.max_cost}; "
+                  f"{len(jobs_) - len(results)} runs not started", flush=True)
+            break
+        tag = f"{sc['name']} / {m}" + (f" #{r + 1}" if a.repeat > 1 else "")
+        print(f"running {tag} ...", flush=True)
+        name = f"{sc['name']}--{m}" + (f"--{r + 1}" if a.repeat > 1 else "")
+        run = run_scenario(sc, m, Path(a.state) / out.name / name, owner)
+        if jud:
+            judge(run, sc, *jud)
+        (out / f"{name}.md").write_text(transcript(run, sc), encoding="utf-8")
+        (out / f"{name}.json").write_text(json.dumps(run.__dict__, indent=1, default=str), encoding="utf-8")
+        print(f"  {run.passed}/{len(run.checks)} checks, {len(run.calls)} tool calls, "
+              f"agent ${run.cost:.4f}, {run.seconds:.0f}s{'  ERROR ' + run.error if run.error else ''}", flush=True)
+        results.append(run)
     write_summary(out, results, models)
     print(f"\n{(out / 'summary.md').read_text(encoding='utf-8')}\nfull results: {out}")
     return 0
@@ -359,6 +408,9 @@ def write_summary(out: Path, results: list[Run], models: list[str]) -> None:
         cells = []
         for m in models:
             rs = [r for r in results if r.scenario == name and r.model == m]
+            if not rs:
+                cells.append("not run")
+                continue
             passed = sum(r.passed for r in rs)
             total = sum(len(r.checks) for r in rs)
             calls = sum(len(r.calls) for r in rs) / len(rs)
@@ -367,9 +419,15 @@ def write_summary(out: Path, results: list[Run], models: list[str]) -> None:
     totals = []
     for m in models:
         rs = [r for r in results if r.model == m]
+        unpriced = sum(r.unpriced_calls for r in rs)
+        est = "~" if any(r.estimated for r in rs) else ""
         totals.append(f"{sum(r.passed for r in rs)}/{sum(len(r.checks) for r in rs)}, "
-                      f"${sum(r.cost for r in rs):.3f}, {sum(r.seconds for r in rs):.0f}s")
-    rows.append("| **total** | " + " | ".join(totals) + " |")
+                      f"{est}${sum(r.cost for r in rs):.4f}{'+?' if unpriced else ''}, {sum(r.seconds for r in rs):.0f}s")
+    rows.append("| **total** (checks, agent cost, time) | " + " | ".join(totals) + " |")
+    side = sum(r.side_cost for r in results)
+    rows.append(f"\nSimulated owner and judge: ${side:.4f} (not in the totals). "
+                "Costs are what the provider reported, including bring-your-own-key charges; ~ marks an "
+                "estimate from bench/prices.toml at peak rates (DeepSeek reports no cost).")
     (out / "summary.md").write_text("\n".join(rows) + "\n", encoding="utf-8")
 
 

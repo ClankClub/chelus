@@ -1,0 +1,7 @@
+# USD per million tokens, for APIs whose responses carry no cost (OpenRouter's do, and win).
+# DeepSeek, from api-docs.deepseek.com/quick_start/pricing on 2026-11-01: peak rates, so the
+# estimate is an upper bound; off-peak is half (peak is 01-04 and 06-10 UTC on weekdays).
+[deepseek-flash]
+input_cache_hit = 0.006
+input_cache_miss = 0.30
+output = 1.20

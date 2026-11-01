@@ -1,4 +1,5 @@
-# Claude Haiku 5.5 via OpenRouter. Also the default simulated owner and judge.
+# Claude Haiku 5.5 via OpenRouter.
+# $0.10 in / $0.50 out per million: not one of the super cheap ones; a yardstick, not a default.
 provider = "openai"
 base_url = "https://openrouter.ai/api/v1"
 model = "anthropic/claude-haiku-5.5"

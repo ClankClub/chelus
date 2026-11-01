@@ -6,7 +6,9 @@ What it can't tell you: anything about the phone itself. 32-bit Termux, the slow
 
 ## Setup
 
-Docker, plus a key in an environment variable the profile names (`OPENROUTER_API_KEY` for most). Compose passes `OPENROUTER_API_KEY` and `DEEPSEEK_API_KEY` through from the host; nothing is written to disk.
+Docker, plus a key in an environment variable the profile names. Compose passes `OPENROUTER_API_KEY` and `DEEPSEEK_API_KEY` through from the host; nothing is written to disk.
+
+Money: `deepseek-flash` talks to DeepSeek directly on its own key, with the phone's exact settings (thinking on, effort low). OpenRouter is for the cheap non-DeepSeek models; each profile notes its price. The cheapest are GPT-OSS 120B (cheaper than the 20B) and Gemma 4 26B on the free tier.
 
 ```sh
 docker compose -f bench/compose.yaml build
@@ -31,7 +33,7 @@ docker compose -f bench/compose.yaml run --rm chelus sim --models gpt-oss-20b,de
 `python -m bench.sim` (the `sim` command above) runs each scenario in `scenarios/` against each model, in a new home every time, and writes a transcript, a JSON record and a summary table to `out/<timestamp>/`. Nothing deletes earlier results: transcripts stay in `out/` (git-ignored, so `git clean -x` would remove them), and each run's home, with its history database and any files the agent changed, stays in the volume under `/state/runs/<timestamp>/`.
 
 ```
-sim --models a,b --scenarios all|name,name --repeat N --owner haiku-5.5 --judge haiku-5.5|none
+sim --models a,b --scenarios all|name,name --repeat N --owner gpt-oss-120b --judge deepseek-flash|none --max-cost 0.25
 ```
 
 A scenario is TOML:
@@ -41,4 +43,6 @@ A scenario is TOML:
 - `role = "guest"`, `approve = "once"|"session"|"always"|"deny"` (approval cards are answered this way), `[settings]` overrides, `[[seed]]` files in the workdir, `[memory]` entries, `starter_skills = false`.
 - `[[check]]`: `tool_used`, `tool_not_used`, `skill_viewed`, `reply_regex`, `reply_not_regex`, `args_not_regex`, `file_regex`, `max_calls`, `no_errors`, and `judge` (a criterion a model grades from the transcript).
 
-Costs come from OpenRouter's `usage.cost`; other providers show $0. The judge is a cheap model and can be wrong, so read the transcript before trusting a judged failure.
+Costs: OpenRouter reports each call's charge; with bring-your-own-key routing the real charge is `cost_details.upstream_inference_cost`, which the simulator uses. DeepSeek reports none, so its cost is estimated from `prices.toml` at peak rates (marked `~`; off-peak is half). The simulated owner and the judge are totalled separately. `--max-cost` (default $0.25) stops starting new runs once the whole invocation has spent that much. One full suite (eight scenarios) cost about $0.0015 on GPT-OSS 20B and $0.04 on DeepSeek Flash on 2026-11-01.
+
+The judge is a cheap model and can be wrong, and DeepSeek judging DeepSeek may be lenient, so read the transcript before trusting a judged result.

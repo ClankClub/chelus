@@ -1,8 +1,10 @@
-# The phone's model, through OpenRouter. The phone talks to DeepSeek directly with
-# thinking on (effort low); here reasoning is left at the provider's default.
-provider = "openai"
-base_url = "https://openrouter.ai/api/v1"
-model = "~deepseek/deepseek-flash-latest"
-api_key_env = "OPENROUTER_API_KEY"
-api_key_file = "openrouter.key"
-max_tokens = 8192
+# The phone's exact setup: DeepSeek directly, on the owner's DeepSeek key, thinking on at low effort.
+# Keep DeepSeek tests here, not on OpenRouter (whose balance is for the cheap non-DeepSeek models).
+provider = "deepseek"
+base_url = "https://api.deepseek.com"
+model = "deepseek-flash"
+thinking = true
+reasoning_effort = "low"
+max_tokens = 20000
+api_key_env = "DEEPSEEK_API_KEY"
+api_key_file = "deepseek.key"
