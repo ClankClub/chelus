@@ -171,13 +171,15 @@ class LeaseTests(Base):
 
     def test_live_holder_keeps_lease_through_long_provider_retries(self):
         other = Store(self.s.db_path)
-        self.addCleanup(other.close)
         def slow_model(*args, **kw):
             with mock.patch("chelus.store.time.time", return_value=time.time() + 2000):
                 with self.assertRaises(SessionBusy):
                     other.acquire_lease(self.sid, f"pid={os.getpid()}:contender")
             return {"role": "assistant", "content": "still mine"}
-        self.assertEqual(self.agent(slow_model).run_turn("slow request"), "still mine")
+        try:
+            self.assertEqual(self.agent(slow_model).run_turn("slow request"), "still mine")
+        finally:
+            other.close()  # before tearDown removes the folder; Windows can't delete an open file
 
     def test_renewal_detects_lost_ownership(self):
         self.store.acquire_lease(self.sid, "original")

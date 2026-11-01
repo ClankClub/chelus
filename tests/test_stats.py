@@ -1,6 +1,7 @@
 """Local proc sampling and private atomic preferences; no network or model."""
 
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -15,19 +16,19 @@ class RuntimeStatsTests(unittest.TestCase):
         sample = json.dumps({"version": 1, "timestamp": 1000, "cpu_percent": 3.9,
                              "cpu_temp_c": 30.3, "battery_percent": 89, "battery_temp_c": 27.2})
         def read(path, **kw):
-            return MEMINFO if str(path) == "/proc/meminfo" else sample
+            return MEMINFO if Path(path).as_posix() == "/proc/meminfo" else sample
         with patch.object(Path, "read_text", autospec=True, side_effect=read), patch("time.time", return_value=1000):
             self.assertEqual(RuntimeStats().footer(), "mem 1.2/1.7G | cpu 3.9% - 30°C | bat 89% - 27°C")
 
     def test_optional_fields_selected_in_order_and_disk_is_lazy(self):
         sample = json.dumps({"version": 1, "timestamp": 1000, "uptime_seconds": 54659})
         def read(path, **kw):
-            self.assertNotEqual(str(path), "/proc/uptime")
-            return MEMINFO if str(path) == "/proc/meminfo" else sample
+            self.assertNotEqual(Path(path).as_posix(), "/proc/uptime")
+            return MEMINFO if Path(path).as_posix() == "/proc/meminfo" else sample
         import os
         disk = os.statvfs_result((4096, 4096, 5976883, 4744806, 4744700, 1, 1, 1, 0, 255))
         with patch.object(Path, "read_text", autospec=True, side_effect=read), \
-             patch("time.time", return_value=1000), patch("chelus.stats.os.statvfs", return_value=disk) as stat:
+             patch("time.time", return_value=1000), patch("chelus.stats.os.statvfs", return_value=disk, create=True) as stat:
             stats = RuntimeStats(Path("/chosen/workdir"))
             self.assertEqual(stats.footer(), FOOTER)
             stat.assert_not_called()
@@ -60,7 +61,7 @@ class RuntimeStatsTests(unittest.TestCase):
             with self.subTest(key=key, value=value):
                 sample = json.dumps({**base, key: value})
                 def read(path, **kw):
-                    return MEMINFO if str(path) == "/proc/meminfo" else sample
+                    return MEMINFO if Path(path).as_posix() == "/proc/meminfo" else sample
                 with patch.object(Path, "read_text", autospec=True, side_effect=read), patch("time.time", return_value=1000):
                     self.assertEqual(RuntimeStats().footer(("bat", "up")), expected)
 
@@ -68,7 +69,7 @@ class RuntimeStatsTests(unittest.TestCase):
         sample = json.dumps({"version": 1, "timestamp": 970, "battery_percent": 89,
                              "battery_temp_c": 27, "uptime_seconds": 54659})
         def read(path, **kw):
-            return MEMINFO if str(path) == "/proc/meminfo" else sample
+            return MEMINFO if Path(path).as_posix() == "/proc/meminfo" else sample
         with patch.object(Path, "read_text", autospec=True, side_effect=read), \
              patch("time.time", side_effect=[1000, 1001, 1001]), \
              patch("time.monotonic", side_effect=[100, 101]):
@@ -83,7 +84,7 @@ class RuntimeStatsTests(unittest.TestCase):
 
     def test_disk_failure_is_cached_and_does_not_hide_memory(self):
         with patch.object(Path, "read_text", return_value=MEMINFO), \
-             patch("chelus.stats.os.statvfs", side_effect=PermissionError()) as stat, \
+             patch("chelus.stats.os.statvfs", side_effect=PermissionError(), create=True) as stat, \
              patch("time.monotonic", return_value=100):
             stats = RuntimeStats()
             self.assertEqual(stats.footer(("disk", "mem")), FOOTER)
@@ -95,7 +96,7 @@ class RuntimeStatsTests(unittest.TestCase):
         sample = json.dumps({"version": 1, "timestamp": 1000,
                              "cpu_percent": 25.0, "cpu_temp_c": 31.0})
         def read(path, **kw):
-            return MEMINFO if str(path) == "/proc/meminfo" else sample
+            return MEMINFO if Path(path).as_posix() == "/proc/meminfo" else sample
         with patch.object(Path, "read_text", autospec=True, side_effect=read), \
              patch("time.time", return_value=1000):
             self.assertEqual(RuntimeStats().footer(), "mem 1.2/1.7G | cpu 25% - 31°C")
@@ -103,7 +104,7 @@ class RuntimeStatsTests(unittest.TestCase):
     def test_optional_privileged_cpu_cache_footer(self):
         sample = json.dumps({"version": 1, "timestamp": 1000, "cpu_percent": 2.1, "cpu_temp_c": 30.3})
         def read(path, **kwargs):
-            return MEMINFO if str(path) == "/proc/meminfo" else sample
+            return MEMINFO if Path(path).as_posix() == "/proc/meminfo" else sample
         with patch.object(Path, "read_text", autospec=True, side_effect=read), patch("time.time", return_value=1005):
             stats = RuntimeStats()
             self.assertEqual(stats.footer(), FOOTER + " | cpu 2.1% - 30°C")
@@ -143,7 +144,7 @@ class RuntimeStatsTests(unittest.TestCase):
             with self.subTest(changes=changes):
                 sample = json.dumps({**base, **changes})
                 def read(path, **kw):
-                    return MEMINFO if str(path) == "/proc/meminfo" else sample
+                    return MEMINFO if Path(path).as_posix() == "/proc/meminfo" else sample
                 with patch.object(Path, "read_text", autospec=True, side_effect=read), patch("time.time", return_value=1000):
                     self.assertEqual(RuntimeStats().footer(), FOOTER + expected)
 
@@ -151,7 +152,7 @@ class RuntimeStatsTests(unittest.TestCase):
         for sample in (PermissionError(), FileNotFoundError(), "{", "[]", "null", "42", '{}'):
             with self.subTest(sample=sample):
                 def read(path, **kw):
-                    if str(path) == "/proc/meminfo":
+                    if Path(path).as_posix() == "/proc/meminfo":
                         return MEMINFO
                     if isinstance(sample, Exception):
                         raise sample
@@ -164,7 +165,7 @@ class RuntimeStatsTests(unittest.TestCase):
     def test_cpu_cache_expires_even_inside_five_second_read_cache(self):
         sample = json.dumps({"version": 1, "timestamp": 970, "cpu_percent": 25, "cpu_temp_c": None})
         def read(path, **kw):
-            return MEMINFO if str(path) == "/proc/meminfo" else sample
+            return MEMINFO if Path(path).as_posix() == "/proc/meminfo" else sample
         with patch.object(Path, "read_text", autospec=True, side_effect=read), \
              patch("time.time", side_effect=[1000, 1001, 1001]), \
              patch("time.monotonic", side_effect=[100, 101]):
@@ -232,7 +233,8 @@ class PreferencesTests(unittest.TestCase):
             prefs.update(1111, "reset", [])
             self.assertTrue(prefs.enabled(1111))
             self.assertEqual(prefs.fields(1111), ("mem", "cpu", "bat"))
-            self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+            if os.name != "nt":  # Windows ignores chmod
+                self.assertEqual(path.stat().st_mode & 0o777, 0o600)
 
     def test_readding_default_field_keeps_default_order_before_optional_fields(self):
         with tempfile.TemporaryDirectory() as d:

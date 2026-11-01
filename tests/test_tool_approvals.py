@@ -1,4 +1,5 @@
 """Local approval tests: no API/model or phone calls."""
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -26,18 +27,19 @@ class ToolApprovalTests(Base):
         a = Agent(self.s, 'unused', self.store, sid or self.sid, approve, **kw)
         return a._execute(name, args)
 
+    @unittest.skipIf(os.name == "nt", "run_shell uses select() on pipes, which Windows lacks")
     def test_always_matches_exact_action_not_purpose_across_disk_reopen(self):
         self.store.close()
         self.store = Store(self.s.db_path)
         self.sid = self.store.new_session()
-        args = {'command': 'printf ok', 'purpose': 'first reason'}
+        args = {'command': 'echo ok', 'purpose': 'first reason'}
         self.assertFalse(self.action('run_shell', args, approval.ALWAYS)[1])
         self.store.close()
         self.store = Store(self.s.db_path)
         other = self.store.new_session()
         self.assertFalse(self.action('run_shell', dict(args, purpose='new reason'), sid=other)[1])
         self.assertEqual(len(self.asked), 1)
-        self.assertTrue(self.action('run_shell', dict(args, command='printf changed'))[1])
+        self.assertTrue(self.action('run_shell', dict(args, command='echo changed'))[1])
         sub = self.tmp / 'sub'
         sub.mkdir()
         self.s.workdir = str(sub)
@@ -52,7 +54,7 @@ class ToolApprovalTests(Base):
         self.assertTrue(self.action('write_file', write)[1])
 
     def test_guest_cannot_use_grant_or_approve_risky_tools(self):
-        args = {'command': 'printf ok'}
+        args = {'command': 'echo ok'}
         self.action('run_shell', args, approval.SESSION)
         for name, args in [('run_shell', args), ('write_file', {'path': 'guest', 'content': 'no'})]:
             out, failed = self.action(name, args, approval.ALWAYS, guest=True)
@@ -68,7 +70,7 @@ class ToolApprovalTests(Base):
         self.store.close()
         self.store = Store(self.s.db_path)
         self.sid = self.store.new_session()
-        self.action('run_shell', {'command': 'printf ok'}, approval.SESSION)
+        self.action('run_shell', {'command': 'echo ok'}, approval.SESSION)
         args = cli.build_parser().parse_args(['ask', '--session', str(self.sid), 'test'])
         def make_agent(*pos, **kw):
             model = FakeModel([
@@ -87,7 +89,7 @@ class ToolApprovalTests(Base):
         import io
         from tests.test_telegram import FakeBot, OWNER, press
         factory = telegram.AgentFactory(self.s, 'unused', self.store, OWNER)
-        for name, args in [('run_shell', {'command': 'printf ok'}), ('write_file', {'path': 'out', 'content': 'hi'})]:
+        for name, args in [('run_shell', {'command': 'echo ok'}), ('write_file', {'path': 'out', 'content': 'hi'})]:
             req = tools.describe_call(name, args)
             self.assertEqual(req.choices, (approval.ONCE, approval.SESSION, approval.ALWAYS, approval.DENY))
             bot = FakeBot([press(OWNER, 'al')])
@@ -108,7 +110,7 @@ class ToolApprovalTests(Base):
 
     def test_list_revoke_clear_ordinary_grants_without_touching_skills(self):
         self.store.grant('test-skill', 0)
-        self.action('run_shell', {'command': 'printf private-secret'}, approval.ALWAYS)
+        self.action('run_shell', {'command': 'echo private-secret'}, approval.ALWAYS)
         self.action('write_file', {'path': 'out', 'content': 'hello'}, approval.SESSION)
         listing = approval.manage(self.store, '')
         self.assertIn('run_shell', listing)
@@ -118,11 +120,11 @@ class ToolApprovalTests(Base):
         self.assertEqual(len(rows), 2)
         exact = next(r for r in rows if r['session_id'] == 0)
         self.assertIn('Revoked', approval.manage(self.store, f"revoke {exact['id']}"))
-        self.assertTrue(self.action('run_shell', {'command': 'printf private-secret'}, sid=self.store.new_session())[1])
+        self.assertTrue(self.action('run_shell', {'command': 'echo private-secret'}, sid=self.store.new_session())[1])
         self.assertIn('Cleared', approval.manage(self.store, 'clear'))
         self.assertEqual(self.store.tool_grants(), [])
         self.assertIn('No ordinary', approval.manage(self.store, ''))
-        self.assertTrue(self.action('run_shell', {'command': 'printf ok'})[1])
+        self.assertTrue(self.action('run_shell', {'command': 'echo ok'})[1])
         self.assertEqual(self.store.always_grants(), ['test-skill'])
         self.assertIn('Usage:', approval.manage(self.store, 'revoke invalid'))
         self.assertIn('No such', approval.manage(self.store, 'revoke 999'))
@@ -133,7 +135,7 @@ class ToolApprovalTests(Base):
         self.store.close()
         self.store = Store(self.s.db_path)
         self.sid = self.store.new_session()
-        self.action('run_shell', {'command': 'printf ok'}, approval.ALWAYS)
+        self.action('run_shell', {'command': 'echo ok'}, approval.ALWAYS)
         output = io.StringIO()
         args = cli.build_parser().parse_args(['approvals'])
         with contextlib.redirect_stdout(output):
@@ -147,7 +149,7 @@ class ToolApprovalTests(Base):
         self.assertIn('run_shell', output.getvalue())
         self.assertIn('Revoked', output.getvalue())
         self.assertEqual(self.store.tool_grants(), [])
-        self.action('run_shell', {'command': 'printf ok'}, approval.SESSION)
+        self.action('run_shell', {'command': 'echo ok'}, approval.SESSION)
         args = cli.build_parser().parse_args(['approvals', 'clear'])
         with contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(cli.cmd_approvals(self.s, args), 0)
@@ -155,7 +157,7 @@ class ToolApprovalTests(Base):
 
     def test_telegram_management_is_owner_only(self):
         from tests.test_telegram import FakeBot, OWNER, GUEST, msg
-        self.action('run_shell', {'command': 'printf ok'}, approval.ALWAYS)
+        self.action('run_shell', {'command': 'echo ok'}, approval.ALWAYS)
         gid = self.store.tool_grants()[0]['id']
         factory = telegram.AgentFactory(self.s, 'unused', self.store, OWNER)
         bot = FakeBot([])
@@ -169,7 +171,7 @@ class ToolApprovalTests(Base):
         bridge.handle(msg(3, OWNER, f'/approvals revoke {gid}')['message'])
         self.assertIn('Revoked', bot.texts()[-1])
         self.assertEqual(self.store.tool_grants(), [])
-        self.action('run_shell', {'command': 'printf ok'}, approval.SESSION)
+        self.action('run_shell', {'command': 'echo ok'}, approval.SESSION)
         bridge.handle(msg(4, OWNER, '/approvals clear')['message'])
         self.assertIn('Cleared', bot.texts()[-1])
         self.assertEqual(self.store.tool_grants(), [])
@@ -188,16 +190,17 @@ class ToolApprovalTests(Base):
         self.assertTrue(self.action('write_file', args)[1], 'skill conversation grants never authorize ordinary tools')
 
     def test_background_review_does_not_reuse_owner_action_grants(self):
-        args = {'command': 'printf ok'}
+        args = {'command': 'echo ok'}
         self.action('run_shell', args, approval.ALWAYS)
         self.assertTrue(self.action('run_shell', args, actor='review')[1])
         self.assertEqual(len(self.asked), 2)
 
+    @unittest.skipIf(os.name == "nt", "run_shell uses select() on pipes, which Windows lacks")
     def test_conversation_grant_survives_new_agent_and_covers_both_tools(self):
-        self.assertFalse(self.action('run_shell', {'command': 'printf ok'}, approval.SESSION)[1])
+        self.assertFalse(self.action('run_shell', {'command': 'echo ok'}, approval.SESSION)[1])
         self.assertFalse(self.action('write_file', {'path': 'out', 'content': 'hello'})[1])
         self.assertEqual(len(self.asked), 1)
         self.assertEqual((self.tmp / 'out').read_text(), 'hello')
         other = self.store.new_session()
-        self.assertTrue(self.action('run_shell', {'command': 'printf ok'}, sid=other)[1])
+        self.assertTrue(self.action('run_shell', {'command': 'echo ok'}, sid=other)[1])
         self.assertEqual(len(self.asked), 2)

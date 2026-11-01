@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 import tempfile
 import time
 import unittest
@@ -100,9 +101,9 @@ class BridgeTests(unittest.TestCase):
         bridge = telegram.Bridge(self.s, bot, OWNER, self.factory, log=logs.append, guests=set(guests))
         read_text = Path.read_text
         def read(path, *args, **kwargs):
-            if str(path) == "/proc/meminfo":
+            if path.as_posix() == "/proc/meminfo":
                 return meminfo
-            if str(path) == "/data/local/tmp/chelus-telemetry.json":
+            if path.as_posix() == "/data/local/tmp/chelus-telemetry.json":
                 return cpu_sample
             return read_text(path, *args, **kwargs)
         with patch.object(Path, "read_text", read), self.assertRaises(KeyboardInterrupt):
@@ -184,7 +185,8 @@ class BridgeTests(unittest.TestCase):
         self.assertEqual(json.loads(state.read_text()), {
             str(chat): {"enabled": False, "fields": ["mem", "cpu", "bat"]}
             for chat in (OWNER, GUEST)})
-        self.assertEqual(state.stat().st_mode & 0o777, 0o600)
+        if os.name != "nt":  # Windows ignores chmod
+            self.assertEqual(state.stat().st_mode & 0o777, 0o600)
         bot, _, _ = self.run_bridge([[msg(12, OWNER, "again"), msg(13, GUEST, "/stats")]],
                                     [{"role": "assistant", "content": "again"}], guests={GUEST}, meminfo=MEMINFO)
         self.assertEqual(bot.texts(), ["again", "Stats on.\n\n" + FOOTER])
@@ -192,7 +194,7 @@ class BridgeTests(unittest.TestCase):
     def test_stats_field_controls_are_local_persistent_and_resettable(self):
         commands = ["/stats add swap up disk", "/stats remove cpu", "/stats info", "/stats off",
                     "/stats reset", "/stats remove mem cpu bat", "/stats info"]
-        with patch("chelus.stats.os.statvfs", side_effect=PermissionError("denied")):
+        with patch("chelus.stats.os.statvfs", side_effect=PermissionError("denied"), create=True):
             bot, model, bridge = self.run_bridge([[msg(i, OWNER, t) for i, t in enumerate(commands, 1)]
                                                  + [msg(20, GUEST, "/stats add swap")]], [],
                                                  guests={GUEST}, meminfo=MEMINFO)

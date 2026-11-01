@@ -223,7 +223,7 @@ class RuntimeStats:
             self._metrics["disk"] = f"disk {_compact(used / 1024**3)}/{_compact(total / 1024**3)}G"
             self._disk_detail = (f"Disk source: os.statvfs({self.workdir}); used = (f_blocks - f_bfree) * f_frsize = {used} bytes; "
                                  f"total = f_blocks * f_frsize = {total} bytes (actual containing filesystem).")
-        except (OSError, ValueError, OverflowError) as e:
+        except (OSError, ValueError, OverflowError, AttributeError) as e:  # no statvfs on Windows
             self._disk_detail = f"Disk unavailable: os.statvfs({self.workdir}) ({type(e).__name__})."
 
     def footer(self, fields=DEFAULT_FIELDS) -> str:
