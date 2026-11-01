@@ -81,7 +81,7 @@ Chelus polls Telegram over HTTPS. It needs no public IP address or open ports.
 
 The bot accepts private messages from the configured owner. For guest access, put additional numeric user IDs in `~/.config/chelus/telegram_guests`, one per line, and restart the bridge. Guests have separate conversations, cannot access skills or memory, and cannot run risky tools. Guest requests still use your DeepSeek account.
 
-Useful Telegram commands include `/new`, `/learn`, `/skills`, `/pending`, `/undo NAME`, `/memory`, `/stop`, and `/help`. Risky actions require an approval card; unanswered requests are denied after three minutes. If the API stays unavailable, `/stop` cancels the retry countdown.
+Useful Telegram commands include `/new`, `/learn`, `/skills`, `/pending`, `/undo NAME`, `/memory`, `/stop`, and `/help`. The bridge registers them with Telegram when it starts, so typing `/` or tapping the Menu button lists them; guests see only the commands they can use. Risky actions require an approval card; unanswered requests are denied after three minutes. If the API stays unavailable, `/stop` cancels the retry countdown.
 
 ### Runtime stats
 
@@ -151,6 +151,8 @@ Chelus can list and read files, check the battery, write files, run shell comman
 **Memory:** Chelus can keep small, owner-only notes across conversations. It can save facts directly and shows what was saved; proposed changes from background review await approval. Inspect or delete entries with `chelus memory` (or `/memory` in Telegram). With SQLite FTS5 available, the agent can also search past conversations.
 
 **Skills:** A skill is a saved `SKILL.md` procedure, optionally accompanied by reference files or scripts. Use `/learn [what]` to create one from instructions, files, or a recent workflow. Skill writes require approval by default; `chelus skills` manages pending changes, revisions, pins, and undo. Review may propose changes after a conversation, and the weekly curator archives unused review-created skills (not skills you created or pinned). See [Hermes skills notes](docs/hermes/skills.md) for implementation details.
+
+**Starter skills.** [`skills/`](skills/) holds a few procedures rewritten from Hermes's bundled set for this phone and its tools: `blocked-page-recovery`, `grounded-citations`, `arxiv` and `systematic-debugging`. They aren't installed automatically, so a skill you've edited is never overwritten. Copy the ones you want into the skills folder, for example `cp -r skills/research ~/.local/share/chelus/skills/`.
 
 `run_shell` waits up to `shell_timeout` (default 120 seconds; the model can ask for less) and captures at most 65,536 bytes across stdout and stderr; past that, or on timeout or Ctrl-C, it stops the whole process group and returns bounded partial output. Directory listings apply the file-tool policy to each entry, including symlink targets.
 

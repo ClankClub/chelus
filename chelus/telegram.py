@@ -65,6 +65,21 @@ GUEST_HELP = (
     "/help  this message"
 )
 OWNER_ONLY = ("/learn", "/skills", "/pending", "/undo", "/memory", "/approvals", "/cron")
+# The "/" menu Telegram shows while typing. Guests see the short list everywhere; the owner's
+# chat gets the full one. (command, description, owner only)
+MENU = (
+    ("new", "Start a fresh conversation", False),
+    ("learn", "Turn something into a skill (empty: what we just did)", True),
+    ("skills", "List skills and changes waiting for your OK", True),
+    ("pending", "Show skill changes waiting for your OK", True),
+    ("undo", "Undo the last change to a skill: /undo <skill>", True),
+    ("memory", "What I remember about you and this phone", True),
+    ("cron", "Scheduled jobs: /cron pause|resume|run|remove JOB", True),
+    ("approvals", "Ordinary tool grants: /approvals revoke ID|clear", True),
+    ("stats", "Runtime footer: /stats on|off|info|add|remove|reset", False),
+    ("stop", "Cancel an automatic retry while the model is down", False),
+    ("help", "All commands and how to use them", False),
+)
 # Approval buttons: callback code -> choice
 CODES = {"ok": approval.ONCE, "se": approval.SESSION, "al": approval.ALWAYS, "no": approval.DENY}
 CHOICE_CODES = {v: k for k, v in CODES.items()}
@@ -651,8 +666,20 @@ class Bridge:
             return POLL_SECONDS
         return POLL_SECONDS if due is None else max(1, min(POLL_SECONDS, math.ceil(due)))
 
+    def publish_menu(self) -> None:
+        """Register the command menu with Telegram. A failure only costs the menu."""
+        guest = [{"command": c, "description": d} for c, d, owner_only in MENU if not owner_only]
+        full = [{"command": c, "description": d} for c, d, _ in MENU]
+        try:
+            self.bot.call("setMyCommands", {"commands": guest})
+            self.bot.call("setMyCommands", {"commands": full,
+                                            "scope": {"type": "chat", "chat_id": self.owner}})
+        except TelegramError as e:
+            self.log(f"[telegram] command menu not set: {e}")
+
     def run_forever(self) -> None:
         me = self.bot.call("getMe")
+        self.publish_menu()
         who = f"owner {self.owner}" + (f" and {len(self.guests)} guest(s)" if self.guests else "")
         self.log(f"Telegram bridge running as @{me.get('username')}; answering only {who}. Ctrl-C stops it.")
         if self.cron is not None:

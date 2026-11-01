@@ -480,3 +480,20 @@ Decisions that changed from the plan, at the owner's call:
 - Delete means archive, and `undo` reverts the last change to a skill (restoring an archived one), refusing if the file changed since.
 
 To check live: the model's use of `skill_manage` with thinking on, how readable the cards are on a phone screen, and the review's cost and latency.
+
+## Bundled skills (2026-11-01)
+
+Hermes installs about 45 skills from `skills/` by default and keeps about 20 more categories under `optional-skills/`. Most assume a desktop or accounts this phone doesn't have (Apple apps, Office, Google Workspace, Teams, video tools, the Claude Code and Codex drivers). Seven looked useful and were read in full:
+
+- **Ported**, rewritten from scratch to Chelus's house standard (60-char description, the `/learn` section order, under 5,000 characters, Chelus's own tool names) and shipped in the repo's `skills/`:
+  - `blocked-page-recovery`: the ladder without Hermes's script, through `web_fetch`. Jina Reader dropped (403 without a key, checked), archive.today kept but noted as rate-limited.
+  - `grounded-citations`: the citation rules without the ledger script. A Telegram answer doesn't need a JSON ledger, and the rule that matters, URLs only from tool output, is a prompt rule.
+  - `arxiv`: the API via `web_fetch` (Atom comes back as text), `arxiv.org/html/<id>` for the full paper since `web_fetch` can't read PDFs. Semantic Scholar dropped: it refuses anonymous calls from the phone's IP.
+  - `systematic-debugging`: 411 lines cut to about 60, keeping the loop: reproduce, trace, rank guesses, one change, prove it, stop after three failed fixes.
+- **Skipped:** `email-inbox-triage` (Chelus has only its own AgentMail inbox, not the owner's), `weekly-review-planning` and `document-to-action-items` (no calendar, task store or PDF tooling on the phone).
+
+Starter skills are not installed automatically, so an edited skill is never overwritten. `tests/test_starter_skills.py` runs each through `validate_skill_md`, the guard scan and the linter.
+
+**Template.** Hermes keeps its authoring standard in `skills/AGENTS.md`, in `/learn`'s prompt and, condensed, in `skill_manage`'s description. Chelus already had the first two in `learn.py` and `review.py`; `skill_manage`'s description now also carries the section order, and `/learn` names the newer tools (`search_files`, `edit_file`, `web_fetch`, `web_search`).
+
+**Bug found live.** `skill_view` ran the guard scan over its whole output, including the `[skill directory: ...]` line it appends. On the phone that path is under `.local/share/chelus`, which the guard flags as Chelus's private files, so every skill load carried a false injection warning. The scan now covers only the skill's own text. Tests missed it because their temp folders never contain that path.

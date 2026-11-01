@@ -15,6 +15,8 @@ Research). `chelus/guardrails.py`,
 `chelus/repetition.py` and `chelus/compaction.py` are rebuilt from Hermes's
 tool_guardrails, repetition_guard and context_compressor modules (same
 thresholds and rules, written independently).
+The starter skills under `skills/` are rewritten from Hermes's bundled skills of the
+same names (MIT, Copyright (c) 2025 Nous Research), adapted to Chelus's tools.
 It borrows design ideas:
 
 - the OpenAI-style tool schema and registry shape

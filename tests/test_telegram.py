@@ -120,6 +120,33 @@ class BridgeTests(unittest.TestCase):
         self.assertNotIn("/learn", bot.texts()[-1])
         self.assertEqual(model.calls, [])
 
+    def test_command_menu_guest_default_owner_full(self):
+        bot, _, _ = self.run_bridge([], [])
+        menus = [p for m, p in bot.sent if m == "setMyCommands"]
+        self.assertEqual(len(menus), 2)
+        guest, owner = menus
+        self.assertNotIn("scope", guest)
+        self.assertEqual(owner["scope"], {"type": "chat", "chat_id": OWNER})
+        guest_cmds = {c["command"] for c in guest["commands"]}
+        owner_cmds = {c["command"] for c in owner["commands"]}
+        self.assertEqual(guest_cmds, {"new", "stats", "stop", "help"})
+        self.assertTrue({c.lstrip("/") for c in telegram.OWNER_ONLY} <= owner_cmds)
+        self.assertFalse({c.lstrip("/") for c in telegram.OWNER_ONLY} & guest_cmds)
+        for c in owner["commands"]:
+            self.assertRegex(c["command"], r"^[a-z0-9_]{1,32}$")
+            self.assertTrue(3 <= len(c["description"]) <= 256)
+
+    def test_command_menu_failure_is_only_logged(self):
+        class Refusing(FakeBot):
+            def call(self, method, params=None, wait=0):
+                if method == "setMyCommands":
+                    raise telegram.TelegramError("Telegram setMyCommands returned HTTP 400")
+                return super().call(method, params, wait)
+        logs = []
+        bridge = telegram.Bridge(self.s, Refusing([]), OWNER, None, log=logs.append)
+        bridge.publish_menu()
+        self.assertTrue(any("command menu not set" in line for line in logs), logs)
+
     def test_pending_skill_card_keeps_footer_and_buttons(self):
         bot = FakeBot([])
         factory = telegram.AgentFactory(self.s, "k", self.store, OWNER)

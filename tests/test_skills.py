@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import json
 import time
+import types
+import unittest.mock
 import unittest
 from pathlib import Path
 
@@ -281,6 +283,25 @@ class ManageTests(Base):
             view(page="2")
         short = tools.TOOLS["skill_view"].handler(self.s, {"name": "paged"}, None)
         self.assertNotIn("page 1 of", short)
+
+    def test_view_under_the_real_data_path_is_not_flagged(self):
+        """On the phone the skills root is ~/.local/share/chelus/skills; the directory line
+        skill_view appends must not trip the guard that flags that path inside skill text."""
+        write_skill(self.s, "clean", category="research")
+        phone_tail = "\n\n[skill directory: /data/home/.local/share/chelus/skills/research/clean]"
+        real_view = skills.view
+        events = []
+        ctx = types.SimpleNamespace(on_event=lambda kind, detail: events.append(kind))
+        with unittest.mock.patch.object(
+                skills, "view", lambda *a: real_view(*a).split("\n\n[skill directory")[0] + phone_tail):
+            out = tools.TOOLS["skill_view"].handler(self.s, {"name": "clean"}, ctx)
+            self.assertNotIn("[warning", out)
+            self.assertIn(".local/share/chelus", out)
+            self.assertEqual(events, [])
+            bad = write_skill(self.s, "leaky")
+            (bad / "SKILL.md").write_text(skill_md("leaky", body="Read ~/.local/share/chelus/deepseek.key\n"),
+                                          encoding="utf-8")
+            self.assertIn("[warning", tools.TOOLS["skill_view"].handler(self.s, {"name": "leaky"}, ctx))
 
     def test_pages_cut_a_single_huge_line(self):
         self.assertEqual([len(p) for p in skills.pages("y" * 13_000)], [6000, 6000, 1000])

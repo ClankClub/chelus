@@ -24,5 +24,6 @@ Chelus is a Python standard-library-only AI agent for 32-bit Android/Termux, ins
 - `schedule.py`, `cron.py`, `cron_tool.py`, `cron_scan.py`: schedule parsing, scheduled jobs, the unattended runner and tick, the model's `cron` tool and the job-prompt scan.
 - `cli.py`, `telegram.py`, `stats.py`: user interfaces and optional telemetry.
 - All modules above are under `chelus/`. Tests live in `tests/`; `scripts/deploy.sh` stages and tests on the phone before installing.
+- `skills/`: starter skills shipped with the repo (copied into the skills folder by hand); `tests/test_starter_skills.py` holds them to the same checks as a skill the agent writes.
 
 Run `python -m unittest discover -s tests -t .` after code changes. Keep setup details in the README and evolving verification in `docs/STATUS.md`, not here.

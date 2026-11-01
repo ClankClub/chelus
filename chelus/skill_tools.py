@@ -406,7 +406,10 @@ def _view(s: Any, args: dict[str, Any], ctx: Any = None) -> str:
             store.usage_bump(skill.name, view=True, use=True)  # viewing means acting on it (Hermes)
         except Exception:
             pass
-    bad = skill_guard.blocking(skill_guard.scan(out))
+    # Scan the skill's own text, not the directory line view() appends: on the phone that path
+    # is under .local/share/chelus, which the guard rightly flags in skill text.
+    content = out if file_path else skills._read(skill.path)
+    bad = skill_guard.blocking(skill_guard.scan(content))
     if bad:
         if ctx is not None and getattr(ctx, "on_event", None):
             ctx.on_event("guard", f"skill {skill.name} contains suspicious text: {bad[0]}")
@@ -445,7 +448,9 @@ tools.register(tools.Tool(
     "first and copy the text exactly; 'content' alone REPLACES the whole SKILL.md, last resort); "
     "write_file / remove_file (support files under references/, templates/, scripts/ or assets/, text in "
     "'file_content'); delete (moves the skill to the archive, restorable). Keep the description at most 60 "
-    "characters and a self-contained trigger: 'Use when <trigger>. <what it does>.' Write lessons, not "
+    "characters and a self-contained trigger: 'Use when <trigger>. <what it does>.' Body order: "
+    "'# Title' and 2-3 sentences, then '## When to Use', '## Procedure' (numbered steps naming your "
+    "own tools), '## Pitfalls', '## Verification'. Write lessons, not "
     "logs: an imperative rule plus one clause of why, no dates or incident stories, one rule per lesson, "
     "references/ files named by topic (extend one before adding another). "
     f"Limits: SKILL.md {skills.MAX_SKILL_CHARS:,} characters, each support file "

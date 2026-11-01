@@ -38,8 +38,9 @@ Body, in this order (leave out a section only if it has nothing to say):
    plus one clause of why.
 5. '## Verification': one check that proves it worked.
 
-Name your own tools in backticks (`read_file`, `list_dir`, `run_shell`, `write_file`,
-`skill_view`), not shell utilities they wrap: `read_file`, not cat. Commands that need
+Name your own tools in backticks (`read_file`, `list_dir`, `search_files`, `edit_file`,
+`web_fetch`, `web_search`, `run_shell`, `skill_view`), not shell utilities they wrap:
+`read_file`, not cat; `search_files`, not grep; `web_fetch`, not curl. Commands that need
 the shell are run through `run_shell`, which the owner approves.
 
 Quality: prefer commands, paths and settings that appear verbatim in the source. Never
