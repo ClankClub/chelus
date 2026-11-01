@@ -10,9 +10,9 @@ The core agent loop, tools, conversation history, memory, skills, and Telegram b
 
 The project adapts ideas from [Hermes Agent](https://github.com/NousResearch/hermes-agent) for hardware that cannot install its usual dependencies. Chelus is independent of Nous Research. See [NOTICE](NOTICE) for attribution.
 
-**Status (2026-10-26):** operational, **pre-1.0**, on a Samsung Galaxy A10e (Android 11, 32-bit Termux). The owner has confirmed live operation beyond terminal/Telegram chat: email, deployments through an on-phone Vercel CLI, hosted job storage, wireless ADB operations, and external research/storage tools. **The live setup is ahead of the checked-in source**; those optional integrations are not all supplied by a fresh clone. Base scheduling/cron integration and unattended/reboot reliability still need work. See [current verification and remaining gaps](docs/STATUS.md).
+**Status:** operational, **pre-1.0**, on a Samsung Galaxy A10e (Android 11, 32-bit Termux). The owner has confirmed live operation beyond terminal/Telegram chat: email, deployments through an on-phone Vercel CLI, hosted job storage, wireless ADB operations, and external research/storage tools. Those optional integrations are not all supplied by a fresh clone. Base scheduling/cron is implemented; unattended/reboot reliability and several live flows still need verification. See [current verification and remaining gaps](docs/STATUS.md).
 
-**Project name vs. command name:** the repository is now **Chelus**, but the Python package, `chelus` command, script names, and local config/data paths have not yet been renamed. Commands below use the identifiers that work with the current code.
+**Project and command name:** the repository, Python package, launcher and runtime paths now use **Chelus** / `chelus`. Older Chelys installations migrate their config and data paths on first start; see [Configuration](#configuration).
 
 [Requirements](#requirements) · [Install](#install) · [Terminal](#terminal-usage) · [Telegram](#telegram) · [Development](#development)
 
@@ -196,6 +196,8 @@ web_chars = 8000            # how much of a page the model sees at once
 The defaults and full set of supported keys are in [chelus/config.py](chelus/config.py); unknown keys or wrong types are errors. `CHELUS_CONFIG_DIR`, `CHELUS_DATA_DIR` and `CHELUS_CACHE_DIR` (default `~/.cache/chelus`) override the respective directories. Chelus was called Chelys until 2026-10-28: on first start, `~/.config/chelys` and `~/.local/share/chelys` are moved to their `chelus` names and a symlink is left at the old path, and `CHELYS_CONFIG_DIR` / `CHELYS_DATA_DIR` are still honored. Customize the agent's personality with `~/.config/chelus/persona.md`; otherwise it uses [the default persona](chelus/persona_default.md).
 
 ## Development
+
+The product site and user guides live under [website/](website/README.md), with a separate static build and GitHub Pages workflow. The website requires no additional dependencies for the agent.
 
 ```sh
 python -m unittest discover -s tests -t .

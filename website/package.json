@@ -1,0 +1,10 @@
+{
+  "name": "chelus-website",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "python3 dev.py",
+    "build": "python3 build.py",
+    "test": "python3 -m unittest discover -s tests"
+  }
+}

@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>$title — Chelus</title>
+  <meta name="description" content="$description">
+  <meta name="theme-color" content="#f3eee8">
+  $robots
+  <link rel="canonical" href="$canonical">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="$title — Chelus">
+  <meta property="og:description" content="$description">
+  <meta property="og:url" content="$canonical">
+  <meta property="og:image" content="https://clankclub.github.io${base}assets/social-card.png">
+  <meta name="twitter:card" content="summary_large_image">
+  <link rel="icon" href="${base}assets/chelus-mark.svg" type="image/svg+xml">
+  <link rel="preload" href="${base}assets/fonts/LibreCaslonDisplay-Regular.ttf" as="font" type="font/ttf" crossorigin>
+  <link rel="stylesheet" href="${base}assets/site.css">
+  <script src="${base}assets/site.js" defer></script>
+</head>
+<body class="$page_class">
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="site-header">
+    <a class="brand" href="$base" aria-label="Chelus home"><img src="${base}assets/chelus-mark.svg" alt="" width="55" height="53"><span>CHELUS</span></a>
+    <button class="menu-toggle" type="button" data-menu hidden aria-expanded="false" aria-controls="primary-nav">Menu</button>
+    <nav id="primary-nav" class="main-nav" aria-label="Main navigation" data-open="false">$nav_start $nav_guide <a class="github-link" href="$repo"><img src="${base}assets/icons/github.svg" alt="" width="21" height="21"><span>GitHub</span></a></nav>
+  </header>
+  <main id="main">$body</main>
+  <footer class="site-footer">
+    <a class="footer-wordmark" href="$base">CHELUS</a>
+    <p>A small agent. A longer memory.</p>
+    <nav aria-label="Footer"><a href="${base}reference/">Reference</a><a href="$repo/blob/main/docs/STATUS.md">Project status</a><a href="$repo/blob/main/NOTICE">Acknowledgments</a><a href="$repo/blob/main/LICENSE">MIT license</a></nav>
+    <p class="footer-note">Independent open-source software, inspired by Hermes Agent. Development toward 1.0.</p>
+  </footer>
+</body>
+</html>
