@@ -449,6 +449,16 @@ class ProviderShapeTests(unittest.TestCase):
         self.assertEqual(p["messages"][0]["reasoning_content"], " ")
         self.assertNotIn("tools", p)
 
+    def test_openai_provider_sends_only_standard_fields(self):
+        for thinking in (False, True):
+            s = Settings(provider="openai", model="openai/gpt-oss-20b", thinking=thinking)
+            msgs = [{"role": "assistant", "content": "", "reasoning_content": "hmm",
+                     "tool_calls": [tool_call("list_dir", {})]}]
+            p = provider.build_payload(s, msgs, tools.schemas())
+            self.assertEqual(set(p), {"model", "messages", "max_tokens", "stream", "tools"})
+            self.assertNotIn("reasoning_content", p["messages"][0])
+            self.assertIsNone(p["messages"][0]["content"])
+
 
 class FakeServer:
     """Local stand-in for the DeepSeek API: plain HTTP on 127.0.0.1."""
@@ -620,7 +630,7 @@ class ConfigTests(unittest.TestCase):
             s = make_settings(Path(d))
             old = os.environ.pop("DEEPSEEK_API_KEY", None)
             try:
-                with self.assertRaisesRegex(ConfigError, "no DeepSeek API key"):
+                with self.assertRaisesRegex(ConfigError, "no API key.*DEEPSEEK_API_KEY"):
                     load_api_key(s)
             finally:
                 if old is not None:
@@ -652,6 +662,22 @@ class ConfigTests(unittest.TestCase):
                 (cfg / "config.toml").write_text('bogus = 1\n', encoding="utf-8")
                 with self.assertRaises(ConfigError):
                     load_settings()
+                for bad in ('provider = "anthropic"\n', 'api_key_file = "../escape.key"\n'):
+                    (cfg / "config.toml").write_text(bad, encoding="utf-8")
+                    with self.assertRaises(ConfigError):
+                        load_settings()
+
+    def test_other_provider_key_from_its_own_env_and_file(self):
+        with tempfile.TemporaryDirectory() as d:
+            s = make_settings(Path(d), api_key_env="OPENROUTER_API_KEY", api_key_file="openrouter.key")
+            s.config_dir.mkdir(parents=True)
+            with patch.dict(os.environ, {"OPENROUTER_API_KEY": "sk-or-env", "DEEPSEEK_API_KEY": "sk-ds"}):
+                self.assertEqual(load_api_key(s), "sk-or-env")
+            (s.config_dir / "openrouter.key").write_text("sk-or-file\n", encoding="utf-8")
+            (s.config_dir / "deepseek.key").write_text("sk-ds\n", encoding="utf-8")
+            with patch.dict(os.environ, {"DEEPSEEK_API_KEY": "sk-ds"}):
+                os.environ.pop("OPENROUTER_API_KEY", None)
+                self.assertEqual(load_api_key(s), "sk-or-file")
 
 
 @unittest.skipUnless(os.name == "posix", "shell tool needs a POSIX shell")

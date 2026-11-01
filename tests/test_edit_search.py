@@ -71,6 +71,10 @@ class EditTests(Base):
             ("indent", "class A:\n    def f(self):\n        return 1\n",
              "def f(self):\n    return 1", "def f(self):\n    return 2",
              "class A:\n    def f(self):\n        return 2\n"),
+            # GPT-OSS in the bench sent a stray leading space; it must not land in the file.
+            ("overindent", "[net]\ntimeout = 30\n", " timeout = 30", " timeout = 45", "[net]\ntimeout = 45\n"),
+            ("overindent-block", "def f():\n    return 1\n", "    def f():\n        return 1",
+             "    def f():\n        return 2", "def f():\n    return 2\n"),
             ("escapes", "line one\nline two\n", "line one\\nline two", "line 1\\nline 2", "line 1\nline 2\n"),
             ("ends", "a\nb\nc\n", "\n\nb\n\n", "B", "a\nB\nc\n"),
             ("quotes", "say \u201chi\u201d \u2014 now\n", 'say "hi" - now', 'say "bye" - now',

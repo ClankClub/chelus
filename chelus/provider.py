@@ -1,4 +1,4 @@
-"""DeepSeek chat-completions client using only the standard library.
+"""OpenAI-style chat-completions client (DeepSeek by default) using only the standard library.
 
 No SDK on purpose: the openai package pulls in Rust-built wheels (pydantic-core, jiter)
 that do not build for 32-bit Termux (arm-unknown-linux-androideabi).
@@ -110,15 +110,17 @@ def _api_message(msg: dict[str, Any], thinking: bool) -> dict[str, Any]:
 def build_payload(
     s: Settings, messages: list[dict], tools: list[dict], max_tokens: int | None = None
 ) -> dict[str, Any]:
+    deepseek = s.provider == "deepseek"
     payload: dict[str, Any] = {
         "model": s.model,
-        "messages": [_api_message(m, s.thinking) for m in messages],
+        "messages": [_api_message(m, s.thinking and deepseek) for m in messages],
         "max_tokens": max_tokens or s.max_tokens,
-        "thinking": {"type": "enabled" if s.thinking else "disabled"},
         "stream": False,
     }
-    if s.thinking:
-        payload["reasoning_effort"] = s.reasoning_effort
+    if deepseek:  # other APIs may reject fields they don't know
+        payload["thinking"] = {"type": "enabled" if s.thinking else "disabled"}
+        if s.thinking:
+            payload["reasoning_effort"] = s.reasoning_effort
     if tools:
         payload["tools"] = tools
     return payload
@@ -285,15 +287,15 @@ def _http_error(e: urllib.error.HTTPError) -> ProviderError:
     except Exception:
         pass
     hints = {
-        401: "the API key was rejected (check ~/.config/chelus/deepseek.key)",
-        402: "the DeepSeek account is out of balance",
-        429: "rate limited by DeepSeek",
+        401: "the API key was rejected (check the key file in ~/.config/chelus)",
+        402: "the provider account is out of balance",
+        429: "rate limited by the provider",
     }
     text = f"model API returned HTTP {e.code}"
     if e.code in hints:
         text += f": {hints[e.code]}"
     elif e.code >= 500:
-        text += ": DeepSeek server error"
+        text += ": provider server error"
     if detail:
         text += f" ({str(detail)[:300]})"
     return ProviderError(text, retryable=e.code in RETRYABLE_STATUS or e.code >= 500,

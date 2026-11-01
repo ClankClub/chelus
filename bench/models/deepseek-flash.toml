@@ -1,0 +1,8 @@
+# The phone's model, through OpenRouter. The phone talks to DeepSeek directly with
+# thinking on (effort low); here reasoning is left at the provider's default.
+provider = "openai"
+base_url = "https://openrouter.ai/api/v1"
+model = "~deepseek/deepseek-flash-latest"
+api_key_env = "OPENROUTER_API_KEY"
+api_key_file = "openrouter.key"
+max_tokens = 8192

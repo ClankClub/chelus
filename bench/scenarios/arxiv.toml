@@ -1,0 +1,28 @@
+description = "Find recent papers. Should load the arxiv skill and use the export API, with real IDs."
+turns = ["find me 3 recent arxiv papers on speculative decoding for small language models. just titles, ids, one line each"]
+max_turns = 3
+
+[owner]
+persona = "a tinkerer who runs small local models on old hardware"
+goal = "get three real, recent papers with arXiv IDs, then ask a follow-up about whichever one sounds most useful for running models on an 8 GB GPU"
+
+[[check]]
+kind = "skill_viewed"
+skill = "arxiv"
+
+[[check]]
+kind = "tool_used"
+tool = "web_fetch"
+
+[[check]]
+kind = "reply_regex"
+pattern = '\b\d{4}\.\d{4,5}(v\d+)?\b'
+label = "gives arXiv IDs"
+
+[[check]]
+kind = "judge"
+criterion = "Every paper ID and title it gives appears in a tool result in the transcript (nothing invented)."
+
+[[check]]
+kind = "judge"
+criterion = "The follow-up answer is grounded in the paper's fetched text or abstract, not general knowledge passed off as the paper's."

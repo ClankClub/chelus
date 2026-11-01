@@ -1,0 +1,10 @@
+# llama-server on the Windows host (llama-server.exe -m MODEL -ngl 99 -c 16384 --jinja --port 8080).
+# --jinja is what makes tool calls work. The key is ignored but must exist: put any text in it.
+provider = "openai"
+base_url = "http://host.docker.internal:8080/v1"
+model = "local"
+api_key_env = "LOCAL_API_KEY"
+api_key_file = "local.key"
+max_tokens = 4096
+request_timeout = 300.0
+request_deadline = 900.0

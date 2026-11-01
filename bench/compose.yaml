@@ -1,0 +1,29 @@
+# docker compose -f bench/compose.yaml run --rm chelus chat     (CHELUS_PROFILE picks the model)
+# docker compose -f bench/compose.yaml run --rm chelus sim --models gpt-oss-20b
+# docker compose -f bench/compose.yaml up bot                   (the test Telegram bot)
+x-bench: &bench
+  build: .
+  image: chelus-bench
+  init: true
+  volumes:
+    - ..:/app:ro                    # source, read-only: the agent can't edit itself
+    - state:/state                  # agent homes and SQLite (a volume: SQLite and Windows mounts don't mix)
+    - ./out:/out                    # simulation transcripts and summaries, readable from the host
+    - ./secrets:/secrets:ro         # telegram.token, telegram_user_id, telegram_guests
+  environment:
+    - OPENROUTER_API_KEY
+    - DEEPSEEK_API_KEY
+    - CHELUS_PROFILE
+
+services:
+  chelus:
+    <<: *bench
+    stdin_open: true
+    tty: true
+  bot:
+    <<: *bench
+    command: ["telegram"]
+    restart: unless-stopped
+
+volumes:
+  state:

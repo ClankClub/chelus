@@ -48,9 +48,15 @@ def _cache_dir() -> Path:
 
 @dataclass
 class Settings:
-    # Provider
+    # Provider. "deepseek" sends DeepSeek's thinking switch and replays reasoning_content;
+    # "openai" is any other OpenAI-compatible chat-completions API (OpenRouter, Groq,
+    # llama-server) and sends only the standard fields.
+    provider: str = "deepseek"
     base_url: str = "https://api.deepseek.com"
     model: str = "deepseek-flash"
+    # Where the key comes from: this environment variable, else this file in config_dir.
+    api_key_env: str = "DEEPSEEK_API_KEY"
+    api_key_file: str = "deepseek.key"
     thinking: bool = False
     reasoning_effort: str = "high"  # DeepSeek's default; used only when thinking is enabled
     max_tokens: int = 2048
@@ -137,6 +143,10 @@ def load_settings() -> Settings:
             setattr(s, key, type(current)(value))
     if s.skill_approval not in ("ask", "off"):
         raise ConfigError(f"skill_approval in {path} must be \"ask\" or \"off\"")
+    if s.provider not in ("deepseek", "openai"):
+        raise ConfigError(f"provider in {path} must be \"deepseek\" or \"openai\"")
+    if not s.api_key_file or Path(s.api_key_file).name != s.api_key_file:
+        raise ConfigError(f"api_key_file in {path} must be a plain file name in {s.config_dir}")
     if s.reasoning_effort not in ("low", "high", "max"):
         raise ConfigError(f"reasoning_effort in {path} must be \"low\", \"high\" or \"max\"")
     return s
@@ -144,10 +154,10 @@ def load_settings() -> Settings:
 
 def load_api_key(s: Settings) -> str:
     """Env var wins, then the key file. Never logged or printed."""
-    key = os.environ.get("DEEPSEEK_API_KEY", "").strip()
+    key = os.environ.get(s.api_key_env, "").strip() if s.api_key_env else ""
     if key:
         return key
-    path = s.config_dir / "deepseek.key"
+    path = s.config_dir / s.api_key_file
     try:
         key = path.read_text(encoding="utf-8").strip()
     except FileNotFoundError:
@@ -155,7 +165,6 @@ def load_api_key(s: Settings) -> str:
     except OSError as e:
         raise ConfigError(f"could not read key file {path}: {e}") from e
     if not key:
-        raise ConfigError(
-            f"no DeepSeek API key. Put it in {path} (chmod 600) or set DEEPSEEK_API_KEY."
-        )
+        hint = f" or set {s.api_key_env}" if s.api_key_env else ""
+        raise ConfigError(f"no API key. Put it in {path} (chmod 600){hint}.")
     return key

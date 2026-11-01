@@ -1,0 +1,7 @@
+# Claude Haiku 5.5 via OpenRouter. Also the default simulated owner and judge.
+provider = "openai"
+base_url = "https://openrouter.ai/api/v1"
+model = "anthropic/claude-haiku-5.5"
+api_key_env = "OPENROUTER_API_KEY"
+api_key_file = "openrouter.key"
+max_tokens = 8192

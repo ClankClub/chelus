@@ -1,0 +1,22 @@
+description = "A command longer than the foreground limit. Should background it and report the result later."
+turns = [
+  "run this and tell me what it prints when it's done: sleep 25 && echo build-finished-ok",
+  "/wait 35",
+  "is it done yet?",
+]
+max_turns = 3
+
+[settings]
+shell_timeout = 10.0
+
+[[check]]
+kind = "tool_used"
+tool = "run_shell"
+
+[[check]]
+kind = "reply_regex"
+pattern = 'build-finished-ok'
+label = "reports the output"
+
+[[check]]
+kind = "no_errors"

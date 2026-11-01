@@ -122,10 +122,15 @@ def _reindent(new: str, matched_first_line: str, old_first_line: str) -> str:
     """When indentation was ignored, give new the indentation the file has."""
     have = matched_first_line[:len(matched_first_line) - len(matched_first_line.lstrip())]
     gave = old_first_line[:len(old_first_line) - len(old_first_line.lstrip())]
-    if have == gave or not have.startswith(gave):
+    if have == gave:
         return new
-    extra = have[len(gave):]
-    return "\n".join(extra + l if l.strip() else l for l in new.split("\n"))
+    if have.startswith(gave):  # the model under-indented: add what the file has
+        extra = have[len(gave):]
+        return "\n".join(extra + l if l.strip() else l for l in new.split("\n"))
+    if gave.startswith(have):  # the model over-indented (a stray leading space): take it back off
+        extra = gave[len(have):]
+        return "\n".join(l[len(extra):] if l.startswith(extra) else l for l in new.split("\n"))
+    return new
 
 
 def _closest(text: str, old: str) -> str:

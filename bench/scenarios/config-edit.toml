@@ -1,0 +1,37 @@
+description = "A small targeted file change. Should use edit_file, not rewrite the file."
+turns = ["in app/settings.ini bump retries to 5 and set the timeout to 45. leave everything else alone"]
+
+[[seed]]
+path = "app/settings.ini"
+content = """# service settings
+[network]
+host = example.internal
+timeout = 30
+retries = 2
+
+[logging]
+level = info
+# retries for the log shipper, not the network
+retries = 1
+"""
+
+[[check]]
+kind = "tool_used"
+tool = "edit_file"
+
+[[check]]
+kind = "tool_not_used"
+tool = "write_file"
+label = "did not rewrite the whole file"
+
+[[check]]
+kind = "file_regex"
+path = "app/settings.ini"
+pattern = '\[network\]\nhost = example\.internal\ntimeout = 45\nretries = 5\n'
+label = "network section updated"
+
+[[check]]
+kind = "file_regex"
+path = "app/settings.ini"
+pattern = '# retries for the log shipper, not the network\nretries = 1\n'
+label = "left the logging retries alone"

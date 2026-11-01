@@ -1,0 +1,24 @@
+description = "Open-ended research with a simulated owner. Grounded citations expected."
+turns = ["when's the next total solar eclipse I could see from the US, and where's the best spot for it?"]
+max_turns = 4
+
+[owner]
+persona = "a curious person planning a trip, a bit skeptical of AI answers"
+goal = "get the date, the place with the longest totality, and how long it lasts, each with a source link; ask once where a number came from"
+
+[[check]]
+kind = "tool_used"
+tool = "web_fetch"
+
+[[check]]
+kind = "reply_regex"
+pattern = 'https?://'
+label = "gives source links"
+
+[[check]]
+kind = "judge"
+criterion = "Each source link it gives was fetched or returned by a tool in the transcript (no invented URLs)."
+
+[[check]]
+kind = "judge"
+criterion = "When asked where a number came from, it points to the specific source rather than hand-waving."

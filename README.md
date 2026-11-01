@@ -195,6 +195,16 @@ web = true
 web_chars = 8000            # how much of a page the model sees at once
 ```
 
+Other OpenAI-compatible APIs (OpenRouter, Groq, a local `llama-server`) work with `provider = "openai"`, which drops DeepSeek's `thinking` field and `reasoning_content` replay:
+
+```toml
+provider = "openai"
+base_url = "https://openrouter.ai/api/v1"
+model = "openai/gpt-oss-20b"
+api_key_env = "OPENROUTER_API_KEY"   # read first
+api_key_file = "openrouter.key"      # then this file in ~/.config/chelus
+```
+
 The defaults and full set of supported keys are in [chelus/config.py](chelus/config.py); unknown keys or wrong types are errors. `CHELUS_CONFIG_DIR`, `CHELUS_DATA_DIR` and `CHELUS_CACHE_DIR` (default `~/.cache/chelus`) override the respective directories. Chelus was called Chelys until 2026-10-28: on first start, `~/.config/chelys` and `~/.local/share/chelys` are moved to their `chelus` names and a symlink is left at the old path, and `CHELYS_CONFIG_DIR` / `CHELYS_DATA_DIR` are still honored. Customize the agent's personality with `~/.config/chelus/persona.md`; otherwise it uses [the default persona](chelus/persona_default.md).
 
 ## Development
@@ -206,6 +216,10 @@ python -m unittest discover -s tests -t .
 Tests use a fake model and local HTTP server; they do not call DeepSeek.
 
 `sh scripts/deploy.sh` stages a candidate in a temporary folder on the phone (host alias `galaxy-a10e`, or set `CHELUS_HOST`), runs the suite there and reports the real test status. A failing candidate leaves the install untouched; a passing one is copied into place. Stop the bridge before deploying and restart it afterward.
+
+### Test bench
+
+[bench/](bench/README.md) runs Chelus in a Docker container on a PC, for trying other models and running scripted or simulated conversations that are scored and saved as transcripts. It doesn't replace testing on the phone: 32-bit Termux, the slow CPU and Android's background limits only show up there.
 
 Chelus sends OpenAI-compatible JSON to DeepSeek using `urllib` instead of an SDK with native dependencies. Conversations are saved as they happen, and older context is summarized rather than silently dropped. Only one turn can run against a conversation at a time. Design and porting notes live in [docs/hermes/](docs/hermes/).
 

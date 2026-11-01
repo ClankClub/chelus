@@ -1,0 +1,20 @@
+description = "Remember a fact, start a new conversation, recall it."
+turns = [
+  "fyi my sister Juniper's birthday is march 3rd. she likes fountain pens",
+  "/new",
+  "what's a good gift idea for my sister, and when do I need it by?",
+]
+
+[[check]]
+kind = "tool_used"
+tool = "memory"
+
+[[check]]
+kind = "reply_regex"
+pattern = 'march\s*3|3(rd)?\s*march|3/3'
+label = "recalls the date after /new"
+
+[[check]]
+kind = "reply_regex"
+pattern = 'fountain|pen\b'
+label = "recalls the preference"
