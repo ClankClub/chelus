@@ -1,0 +1,27 @@
+description = "Details about a person, too many for memory. Should go into a note, and come back after /new."
+turns = [
+  "keep this somewhere for me: my friend Dana Okafor is a marine biologist at the city aquarium, allergic to shellfish, birthday June 14, we met on a diving course in 2019, and she has a corgi called Pixel",
+  "/new",
+  "I'm cooking for Dana on Saturday. what should I avoid, and what's her dog called again?",
+]
+
+[[check]]
+kind = "tool_used"
+tool = "note_write"
+
+[[check]]
+kind = "tool_used"
+tool = "notes_search"
+
+[[check]]
+kind = "reply_regex"
+pattern = '(?i)shellfish'
+label = "recalls the allergy after /new"
+
+[[check]]
+kind = "reply_regex"
+pattern = 'Pixel'
+label = "recalls the dog's name"
+
+[[check]]
+kind = "no_errors"

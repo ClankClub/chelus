@@ -23,7 +23,7 @@ CHOICE_KEYS = {"o": approval.ONCE, "y": approval.ONCE, "yes": approval.ONCE, "s"
 
 def _event(kind: str, text: str) -> None:
     label = {"tool": "  > ", "result": "    = ", "denied": "  x denied: ", "retry": "  ~ ", "wait": "  ~ ",
-             "guard": "  ! ", "notice": "  ~ ", "usage": "  . ", "memory": "  + remembered: "}.get(kind, "  ")
+             "guard": "  ! ", "notice": "  ~ ", "usage": "  . ", "memory": "  + remembered: ", "notes": "  + note: "}.get(kind, "  ")
     print(f"{label}{text}", file=sys.stderr, flush=True)
 
 

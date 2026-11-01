@@ -58,7 +58,9 @@ def _inside(path: str, root: str) -> bool:
 
 
 def off_limits(s: Settings) -> list[Path]:
-    return [s.config_dir, s.data_dir, Path.home() / ".ssh"]
+    # The notes folder goes through the notes tools only (locking, scanning, the index),
+    # even when it sits in shared storage under the working directory.
+    return [s.config_dir, s.data_dir, s.notes_root, Path.home() / ".ssh"]
 
 
 def _resolve(s: Settings, path: Any, ctx: Any = None) -> Path:
@@ -72,8 +74,9 @@ def _resolve(s: Settings, path: Any, ctx: Any = None) -> Path:
     real = os.path.realpath(p)
     for root in off_limits(s):
         if _inside(real, os.path.realpath(root)):
-            raise ToolError(f"{p} is off limits: that directory holds Chelus's keys, settings, history "
-                            "or skills. Use skills_list and skill_view for skills.")
+            raise ToolError(f"{p} is off limits: that directory holds Chelus's keys, settings, history, "
+                            "skills or notes. Use skills_list and skill_view for skills, and the notes "
+                            "tools for notes.")
     if getattr(ctx, "guest", False):
         work = os.path.realpath(s.workdir)
         rel = os.path.relpath(real, work) if _inside(real, work) else None
@@ -417,7 +420,7 @@ def register(tool: Tool) -> None:
     TOOLS[tool.name] = tool
 
 
-OWNER_GROUPS = ("skills", "memory", "cron", "web", "shell_jobs")
+OWNER_GROUPS = ("skills", "memory", "cron", "web", "shell_jobs", "notes")
 
 
 def available(guest: bool = False, disabled: tuple[str, ...] = ()) -> list[str]:

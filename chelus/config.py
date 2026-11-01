@@ -105,6 +105,12 @@ class Settings:
     memory_review_interval: int = 10
     # Full-text search over past conversations (owner only; needs SQLite with FTS5).
     session_search: bool = True
+    # Notes (owner only; docs/NOTES.md): a folder of linked Markdown notes Chelus searches,
+    # reads and writes, in the format Obsidian and other editors read. notes_dir "" means
+    # <data_dir>/notes; ~ is expanded, and a relative path starts at workdir. A folder in
+    # shared storage lets other apps (Markor, Syncthing) open it, and read it.
+    notes: bool = True
+    notes_dir: str = ""
     # Where file tools start and shell commands run.
     workdir: str = field(default_factory=lambda: str(Path.home()))
     config_dir: Path = field(default_factory=_config_dir)
@@ -118,6 +124,14 @@ class Settings:
     @property
     def persona_path(self) -> Path:
         return self.config_dir / "persona.md"
+
+    @property
+    def notes_root(self) -> Path:
+        raw = self.notes_dir.strip()
+        if not raw:
+            return self.data_dir / "notes"
+        p = Path(os.path.expanduser(raw))
+        return p if p.is_absolute() else Path(self.workdir) / p
 
 
 class ConfigError(Exception):
@@ -149,6 +163,18 @@ def load_settings() -> Settings:
         raise ConfigError(f"api_key_file in {path} must be a plain file name in {s.config_dir}")
     if s.reasoning_effort not in ("low", "high", "max"):
         raise ConfigError(f"reasoning_effort in {path} must be \"low\", \"high\" or \"max\"")
+    if s.notes_dir.strip():
+        # The notes folder is off limits to the file tools, so it must not swallow the
+        # working directory or Chelus's own folders.
+        root = os.path.realpath(s.notes_root)
+        for other in (s.workdir, s.config_dir, Path.home()):
+            o = os.path.realpath(other)
+            try:
+                inside = os.path.commonpath([os.path.normcase(o), os.path.normcase(root)]) == os.path.normcase(root)
+            except ValueError:
+                inside = False
+            if inside:
+                raise ConfigError(f"notes_dir in {path} must be its own folder, not {other} or a folder that holds it")
     return s
 
 

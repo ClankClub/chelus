@@ -621,7 +621,8 @@ class Bridge:
             return
         # Every memory write is shown, so a claimed save that never happened is visible.
         notes = "".join(f"[remembered] {n}\n" for n in agent.memory_notes)
-        used = [t for t in dict.fromkeys(agent.tools_ok) if t != "memory"]
+        notes += "".join(f"[note] {n}\n" for n in getattr(agent, "note_changes", []))
+        used = [t for t in dict.fromkeys(agent.tools_ok) if t not in ("memory", "note_write", "note_edit")]
         if used:  # only tools that actually ran, not denied or failed calls
             notes = f"[used {', '.join(used)}]\n" + notes
         reply = notes + reply

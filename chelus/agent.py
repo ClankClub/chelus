@@ -40,7 +40,7 @@ from importlib import resources
 from typing import Any, Callable
 
 # skill_tools, memory, session_search and cron_tool register their tools on import
-from . import approval, compaction, cron_tool, guardrails, memory, provider, session_search, skill_tools, skills, spill, tools, web, edit, search  # noqa: F401
+from . import approval, compaction, cron_tool, guardrails, memory, notes, provider, session_search, skill_tools, skills, spill, tools, web, edit, search  # noqa: F401
 from .config import Settings
 from .repetition import is_repetition_dominated
 from .store import SessionBusy, Store, history_chars, recent_window
@@ -120,11 +120,13 @@ def disabled_tools(s: Settings, store: Store | None = None) -> tuple[str, ...]:
         off.append("session_search")
     if not s.web:
         off += ["web_fetch", "web_search"]
+    if not s.notes:
+        off += list(notes.TOOL_NAMES)
     return tuple(off)
 
 
 def system_prompt(s: Settings, guest: bool = False, skills_index: str | None = None,
-                  memory_snapshot: str | None = None, search: bool = False) -> str:
+                  memory_snapshot: str | None = None, search: bool = False, notes_shape: str | None = None) -> str:
     """Byte-stable for a given config, frozen skill index and frozen memory snapshot:
     nothing here may change between turns (no clock), or DeepSeek's prefix cache misses on
     the whole history. Order follows Hermes: identity and rules, then skills, then memory."""
@@ -152,15 +154,19 @@ def system_prompt(s: Settings, guest: bool = False, skills_index: str | None = N
     recall = memory.prompt_section(memory_snapshot if s.memory else None, search)
     if recall:
         prompt += "\n\n" + recall
+    kept = notes.prompt_section(notes_shape if s.notes else None)
+    if kept:
+        prompt += "\n\n" + kept
     return prompt
 
 
 def conversation_prompt(s: Settings, store: Store, session_id: int) -> str:
-    """The owner's prompt for a conversation, from its frozen skill index and memory
-    snapshot: what the background review must replay to read the prefix cache warm."""
+    """The owner's prompt for a conversation, from its frozen skill index, memory snapshot
+    and notes line: what the background review must replay to read the prefix cache warm."""
     return system_prompt(s, False, store.session_field(session_id, "skills_index") or "",
                          store.session_field(session_id, "memory_snapshot") or "",
-                         "session_search" not in disabled_tools(s, store))
+                         "session_search" not in disabled_tools(s, store),
+                         store.session_field(session_id, "notes_shape") or "")
 
 
 LEARN_STEPS = 16  # a /learn turn reads sources and writes several files; Hermes gives it a normal turn's budget
@@ -290,6 +296,7 @@ class Agent:
         self.memory_review_due = False      # ... and/or the memory review
         self.memory_failures = 0            # failed memory writes this turn (the tool stops at 3)
         self.memory_notes: list[str] = []   # memory writes this turn, for the reply's notice
+        self.note_changes: list[str] = []   # note writes this turn, for the reply's notice
         self.step_limit = s.max_iterations
         self._history: list[dict[str, Any]] = []
         self._turn: list[dict[str, Any]] = []
@@ -324,7 +331,7 @@ class Agent:
         self._turn_no, self._recoveries = None, 0
         self._image_data_url = self._image_api_content = None
         self.review_due = self.memory_review_due = False
-        self.memory_failures, self.memory_notes = 0, []
+        self.memory_failures, self.memory_notes, self.note_changes = 0, [], []
         self.step_limit = max(step_limit or 0, self.s.max_iterations)
         holder = f"pid={os.getpid()}:{secrets.token_hex(3)}"
         self.store.acquire_lease(self.session_id, holder)
@@ -429,7 +436,12 @@ class Agent:
         if self.s.memory and (snap is None or refresh):
             snap = memory.snapshot(self.s)
             self.store.set_session_field(self.session_id, "memory_snapshot", snap)
-        self.system = system_prompt(self.s, False, frozen, snap or "", "session_search" in self.tool_names)
+        shape = self.store.session_field(self.session_id, "notes_shape")
+        if self.s.notes and (shape is None or refresh):
+            shape = notes.shape(self.s)
+            self.store.set_session_field(self.session_id, "notes_shape", shape)
+        self.system = system_prompt(self.s, False, frozen, snap or "", "session_search" in self.tool_names,
+                                    shape or "")
         note = skills.change_note(frozen, skills.index_map(current))
         noted = self.store.session_field(self.session_id, "skills_noted") or ""
         if note == noted:

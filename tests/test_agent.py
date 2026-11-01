@@ -22,7 +22,8 @@ from chelus.store import Store, recent_window
 
 
 def make_settings(tmp: Path, **kw) -> Settings:
-    s = Settings(config_dir=tmp / "cfg", data_dir=tmp / "data", workdir=str(tmp))
+    # cache_dir too: the notes index lives there, and tests must never touch the real one
+    s = Settings(config_dir=tmp / "cfg", data_dir=tmp / "data", cache_dir=tmp / "cache", workdir=str(tmp))
     for k, v in kw.items():
         setattr(s, k, v)
     return s

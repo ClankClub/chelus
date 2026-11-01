@@ -150,6 +150,8 @@ Chelus can list and read files, check the battery, write files, run shell comman
 
 **Memory:** Chelus can keep small, owner-only notes across conversations. It can save facts directly and shows what was saved; proposed changes from background review await approval. Inspect or delete entries with `chelus memory` (or `/memory` in Telegram). With SQLite FTS5 available, the agent can also search past conversations.
 
+**Notes:** for anything too long for memory (people, projects, places, lists, decisions), Chelus keeps a folder of linked Markdown notes and searches, reads and writes it with owner-only tools. The format is the common one Obsidian, Markor, Logseq and others read: plain `.md` files, `[[wikilinks]]`, `#tags` and YAML frontmatter, so you can open the folder in any of them, or point Chelus at a vault you already have. Writes need no approval and each reply lists what changed; nothing is deleted. The folder is `~/.local/share/chelus/notes` by default and is off limits to the generic file tools. Set `notes_dir` to a folder in shared storage (after `termux-setup-storage`) to edit it in Markor or sync it with Syncthing, but other apps can read shared storage. The search index is a cache in `~/.cache/chelus/notes.sqlite3`; deleting it loses nothing. Set `notes = false` to turn notes off. Design: [docs/NOTES.md](docs/NOTES.md).
+
 **Skills:** A skill is a saved `SKILL.md` procedure, optionally accompanied by reference files or scripts. Use `/learn [what]` to create one from instructions, files, or a recent workflow. Skill writes require approval by default; `chelus skills` manages pending changes, revisions, pins, and undo. Review may propose changes after a conversation, and the weekly curator archives unused review-created skills (not skills you created or pinned). See [Hermes skills notes](docs/hermes/skills.md) for implementation details.
 
 **Starter skills.** [`skills/`](skills/) holds a few procedures rewritten from Hermes's bundled set for this phone and its tools: `blocked-page-recovery`, `grounded-citations`, `arxiv` and `systematic-debugging`. They aren't installed automatically, so a skill you've edited is never overwritten. Copy the ones you want into the skills folder, for example `cp -r skills/research ~/.local/share/chelus/skills/`.
@@ -193,6 +195,8 @@ session_search = true
 curator = true
 web = true
 web_chars = 8000            # how much of a page the model sees at once
+notes = true
+notes_dir = ""               # default ~/.local/share/chelus/notes
 ```
 
 Other OpenAI-compatible APIs (OpenRouter, Groq, a local `llama-server`) work with `provider = "openai"`, which drops DeepSeek's `thinking` field and `reasoning_content` replay:

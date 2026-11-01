@@ -1,0 +1,70 @@
+description = "An existing Obsidian-style vault. Should find the right note, follow its links, and add to one section without disturbing the rest."
+turns = [
+  "what's still on my to-do list for the Lisbon trip, and which of my notes mention it? also add 'book the Cascais ferry' to that list",
+]
+max_turns = 2
+
+[settings]
+notes_dir = "notes"
+
+[[seed]]
+path = "notes/Trips/Lisbon 2027.md"
+content = """---
+aliases:
+  - Lisbon trip
+tags:
+  - travel
+---
+# Lisbon 2027
+
+Flights booked for April. Staying near [[Alfama]].
+
+## To do
+- renew passport
+- ask [[Dana Okafor]] for aquarium tips
+
+## Packing
+- adapter
+"""
+
+[[seed]]
+path = "notes/Places/Alfama.md"
+content = "Old quarter. Fado bars. See [[Lisbon 2027]].\n"
+
+[[seed]]
+path = "notes/People/Dana Okafor.md"
+content = "Marine biologist. Going to Lisbon with us? #friends\n"
+
+[[seed]]
+path = "notes/Inbox.md"
+content = "random: buy stamps, call bank\n"
+
+[[check]]
+kind = "tool_used"
+tool = "note_read"
+
+[[check]]
+kind = "tool_not_used"
+tool = "write_file"
+
+[[check]]
+kind = "file_regex"
+path = "notes/Trips/Lisbon 2027.md"
+pattern = '## To do\n- renew passport\n- ask \[\[Dana Okafor\]\] for aquarium tips\n- .*(?i:cascais ferry).*\n\n## Packing\n- adapter\n'
+label = "added to the To do section only"
+
+[[check]]
+kind = "file_regex"
+path = "notes/Trips/Lisbon 2027.md"
+pattern = '^---\naliases:\n  - Lisbon trip\ntags:\n  - travel\n---\n'
+label = "frontmatter untouched"
+
+[[check]]
+kind = "reply_regex"
+pattern = '(?i)passport'
+label = "reports the open item"
+
+[[check]]
+kind = "reply_regex"
+pattern = '(?i)alfama'
+label = "names a note that links to it"

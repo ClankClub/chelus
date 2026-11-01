@@ -153,6 +153,8 @@ MIGRATIONS = {
                  # since the last memory review; guest conversations are never searched
                  ("memory_snapshot", "TEXT"), ("memory_turns", "INTEGER NOT NULL DEFAULT 0"),
                  ("guest", "INTEGER NOT NULL DEFAULT 0"),
+                 # notes: the vault's one-line shape frozen into this conversation's prompt
+                 ("notes_shape", "TEXT"),
                  # '' for conversations, 'cron' for a scheduled job's run
                  ("origin", "TEXT NOT NULL DEFAULT ''")],
     "cron_jobs": [("retries", "INTEGER NOT NULL DEFAULT 0"), ("script", "TEXT"),
@@ -383,7 +385,7 @@ class Store:
     # ---- per-conversation skill and memory state ----
 
     SESSION_FIELDS = ("skills_index", "skills_noted", "review_steps", "memory_snapshot", "memory_turns", "guest",
-                      "origin", "title")
+                      "origin", "title", "notes_shape")
 
     def session_field(self, session_id: int, column: str) -> Any:
         assert column in self.SESSION_FIELDS
