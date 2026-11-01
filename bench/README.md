@@ -41,7 +41,7 @@ A scenario is TOML:
 - `turns`: scripted messages. `/new` starts a new conversation; `/wait N` sleeps N seconds (for background jobs).
 - `[owner]` with `persona` and `goal`: after the script runs out, a model plays the owner until it says `[DONE]` or `max_turns` is reached.
 - `role = "guest"`, `approve = "once"|"session"|"always"|"deny"` (approval cards are answered this way), `[settings]` overrides, `[[seed]]` files in the workdir, `[memory]` entries, `starter_skills = false`.
-- `[[check]]`: `tool_used`, `tool_not_used`, `skill_viewed`, `reply_regex`, `reply_not_regex`, `args_not_regex`, `file_regex`, `max_calls`, `no_errors`, and `judge` (a criterion a model grades from the transcript).
+- `[[check]]`: `tool_used`, `tool_not_used`, `skill_viewed`, `reply_regex`, `reply_not_regex`, `args_not_regex`, `file_regex`, `file_missing`, `max_calls`, `no_errors`, and `judge` (a criterion a model grades from the transcript).
 
 Costs: OpenRouter reports each call's charge; with bring-your-own-key routing the real charge is `cost_details.upstream_inference_cost`, which the simulator uses. DeepSeek reports none, so its cost is estimated from `prices.toml` at peak rates (marked `~`; off-peak is half). The simulated owner and the judge are totalled separately. `--max-cost` (default $0.25) stops starting new runs once the whole invocation has spent that much. One full suite (eight scenarios) cost about $0.0015 on GPT-OSS 20B and $0.04 on DeepSeek Flash on 2026-11-01.
 

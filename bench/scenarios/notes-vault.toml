@@ -50,8 +50,14 @@ tool = "write_file"
 [[check]]
 kind = "file_regex"
 path = "notes/Trips/Lisbon 2027.md"
-pattern = '## To do\n- renew passport\n- ask \[\[Dana Okafor\]\] for aquarium tips\n- .*(?i:cascais ferry).*\n\n## Packing\n- adapter\n'
+pattern = '## To do\n(?:- .*\n)*- .*(?i:cascais ferry).*\n(?:- .*\n)*\n## Packing\n- adapter\n'
 label = "added to the To do section only"
+
+[[check]]
+kind = "file_regex"
+path = "notes/Trips/Lisbon 2027.md"
+pattern = '## To do\n(?:- .*\n)*- renew passport\n(?:- .*\n)*- ask \[\[Dana Okafor\]\] for aquarium tips\n'
+label = "kept the existing items"
 
 [[check]]
 kind = "file_regex"

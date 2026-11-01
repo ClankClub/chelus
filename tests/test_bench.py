@@ -11,7 +11,7 @@ try:
 except ImportError:  # the phone gets chelus/, tests/ and skills/ only
     sim = None
 
-KNOWN_CHECKS = {"tool_used", "tool_not_used", "skill_viewed", "reply_regex", "reply_not_regex",
+KNOWN_CHECKS = {"tool_used", "tool_not_used", "skill_viewed", "reply_regex", "reply_not_regex", "file_missing",
                 "args_not_regex", "file_regex", "max_calls", "no_errors", "judge"}
 
 

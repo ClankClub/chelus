@@ -151,7 +151,7 @@ def system_prompt(s: Settings, guest: bool = False, skills_index: str | None = N
         return prompt
     if skills_index is not None:
         prompt += "\n\n" + skills.prompt_section(skills_index)
-    recall = memory.prompt_section(memory_snapshot if s.memory else None, search)
+    recall = memory.prompt_section(memory_snapshot if s.memory else None, search, notes=s.notes)
     if recall:
         prompt += "\n\n" + recall
     kept = notes.prompt_section(notes_shape if s.notes else None)

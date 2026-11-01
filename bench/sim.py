@@ -294,6 +294,9 @@ def check(c: dict[str, Any], run: Run, s: Settings) -> dict[str, Any]:
     elif kind == "file_regex":
         path = work / c["path"]
         ok = path.is_file() and re.search(c["pattern"], path.read_text(encoding="utf-8", errors="replace"), re.M) is not None
+    elif kind == "file_missing":
+        ok = not (work / c["path"]).exists()
+        label = c.get("label") or f"{c['path']} is gone"
     elif kind == "max_calls":
         ok = len(run.calls) <= int(c["n"])
         label = c.get("label") or f"at most {c['n']} tool calls"

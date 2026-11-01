@@ -343,7 +343,9 @@ def _over_budget(s: Any, target: str, before: list[str], after: list[str]) -> st
     listing = "\n".join(f"{n}. {e}" for n, e in enumerate(before, 1)) or "(empty)"
     return (f"the {NAMES[target]} would be {used:,} chars; its limit is {lim:,}, so free at least {used - lim:,}. "
             "Send ONE call with 'operations' that removes or shortens stale entries and makes this change, "
-            f"or save something shorter. Current entries:\n{listing}")
+            "or save something shorter"
+            + (" (details can go in a note, with a one-line pointer here)" if getattr(s, "notes", False) else "")
+            + f". Current entries:\n{listing}")
 
 
 def _ops(args: dict[str, Any], target: str) -> list[dict[str, Any]]:
@@ -564,11 +566,15 @@ SEARCH_GUIDANCE = (
 )
 
 
-def prompt_section(snap: str | None, search: bool) -> str:
+NOTES_POINTER = ("When a store fills up or an entry runs long, move the detail into a note and keep a one-line "
+                 "pointer to it here.")
+
+
+def prompt_section(snap: str | None, search: bool, notes: bool = False) -> str:
     """The recall part of the owner's prompt: memory (when on) and session search (when on)."""
     parts = []
     if snap is not None:
-        parts.append(GUIDANCE + ("\n" + SEARCH_GUIDANCE if search else ""))
+        parts.append(GUIDANCE + (" " + NOTES_POINTER if notes else "") + ("\n" + SEARCH_GUIDANCE if search else ""))
         parts.append(snap if snap.strip() else "Both memory stores are empty so far.")
     elif search:
         parts.append("## Past conversations\n" + SEARCH_GUIDANCE)

@@ -1,0 +1,75 @@
+description = "Rename a person's note and bin another. Links to the renamed note should follow it, and the binned note should land in the trash, not vanish."
+turns = [
+  "Dana got married, she's Dana Reyes now. rename her note to that. and bin the Inbox note, it's junk",
+]
+max_turns = 2
+
+[settings]
+notes_dir = "notes"
+
+[[seed]]
+path = "notes/People/Dana Okafor.md"
+content = "Marine biologist at the city aquarium. #friends\n"
+
+[[seed]]
+path = "notes/Trips/Lisbon 2027.md"
+content = "## To do\n- ask [[Dana Okafor]] for aquarium tips\n"
+
+[[seed]]
+path = "notes/Places/Aquarium.md"
+content = "Dana works here: [Dana](../People/Dana%20Okafor.md)\n"
+
+[[seed]]
+path = "notes/Inbox.md"
+content = "random: buy stamps, call bank\n"
+
+[[check]]
+kind = "tool_used"
+tool = "note_move"
+
+[[check]]
+kind = "tool_used"
+tool = "note_trash"
+
+[[check]]
+kind = "tool_not_used"
+tool = "run_shell"
+
+[[check]]
+kind = "tool_not_used"
+tool = "write_file"
+
+[[check]]
+kind = "file_regex"
+path = "notes/People/Dana Reyes.md"
+pattern = 'Marine biologist'
+label = "renamed in her folder, text intact"
+
+[[check]]
+kind = "file_missing"
+path = "notes/People/Dana Okafor.md"
+
+[[check]]
+kind = "file_regex"
+path = "notes/Trips/Lisbon 2027.md"
+pattern = '\[\[Dana Reyes\]\] for aquarium tips'
+label = "wikilink followed the rename"
+
+[[check]]
+kind = "file_regex"
+path = "notes/Places/Aquarium.md"
+pattern = '\(\.\./People/Dana%20Reyes\.md\)'
+label = "Markdown link followed the rename"
+
+[[check]]
+kind = "file_regex"
+path = "notes/.trash/Inbox.md"
+pattern = 'buy stamps'
+label = "Inbox is in the trash, not erased"
+
+[[check]]
+kind = "file_missing"
+path = "notes/Inbox.md"
+
+[[check]]
+kind = "no_errors"

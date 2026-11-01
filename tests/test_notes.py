@@ -1,5 +1,6 @@
-"""Notes (docs/NOTES.md): parsing, link resolution, the index, the three tools, and how
-they sit in the agent. FAKE model only; nothing here proves a live model uses notes well."""
+"""Notes (docs/NOTES.md): parsing, link resolution, the index, the notes tools, moving and
+trash, the owner view, and how they sit in the agent. FAKE model only; nothing here proves a live
+model uses notes well."""
 
 from __future__ import annotations
 
@@ -157,6 +158,17 @@ class SearchTests(NotesBase):
         self.assertNotIn("Soup", self.search(folder="People"))
         self.assertIn("No notes match", self.search(query="zeppelin"))
         self.assertIn("No notes match", self.search(query='"unclosed'))
+
+    def test_a_folder_that_doesnt_exist_searches_everywhere_and_says_so(self):
+        # GPT-OSS 20B on the bench (2026-11-01) searched folder 'Notes', got nothing and gave up
+        out = self.search(query="leek", folder="Notes")
+        self.assertIn("There's no folder 'Notes'; searched all notes. Folders: People, Recipes.", out)
+        self.assertIn("Recipes/Soup", out)
+
+    def test_listings_show_tags_as_written_not_their_parents(self):
+        out = self.search(query="biologist")
+        self.assertIn("tags #friends/diving,", out)
+        self.assertNotIn("#friends ", out)
 
     def test_empty_folder_says_so(self):
         for p in list(self.root.rglob("*.md")):
@@ -343,7 +355,150 @@ class BoundaryTests(NotesBase):
         self.assertEqual(load_settings().notes_root, self.tmp / "n")
 
 
+class MoveTests(NotesBase):
+    def move(self, ctx=None, **args):
+        return notes.move_note(self.s, args, ctx or Ctx())
+
+    def test_rename_rewrites_wikilinks_everywhere_but_code(self):
+        self.put("People/Juniper.md", "# Juniper\n## Gifts\n- books\n")
+        self.put("A.md", "See [[Juniper]], [[Juniper#Gifts|her gifts]] and ![[Juniper]].\n"
+                         "`[[Juniper]]` in code\n```\n[[Juniper]]\n```\n")
+        self.put("B.md", '---\nrelated: "[[Juniper]]"\n---\nbody\n')
+        out = self.move(name="Juniper", to="June")
+        self.assertIn("moved People/Juniper to People/June; link to it as [[June]].", out)
+        self.assertIn("Updated links in 2 note(s): A, B.", out)
+        self.assertFalse((self.root / "People/Juniper.md").exists())
+        self.assertEqual(self.text("People/June.md"), "# Juniper\n## Gifts\n- books\n")
+        self.assertEqual(self.text("A.md"), "See [[June]], [[June#Gifts|her gifts]] and ![[June]].\n"
+                                            "`[[Juniper]]` in code\n```\n[[Juniper]]\n```\n")
+        self.assertEqual(self.text("B.md"), '---\nrelated: "[[June]]"\n---\nbody\n')
+        self.assertIn("Linked from: A (3), B", self.read(name="June"))
+
+    def test_markdown_links_keep_their_style(self):
+        self.put("Trips/Lisbon 2027.md", "## To do\n")
+        self.put("Trips/Plan.md", "[x](Lisbon%202027.md#To%20do)\n")
+        self.put("Places/Alfama.md", "[t](../Trips/Lisbon%202027.md)\n")
+        self.put("Inbox.md", "[t](Trips/Lisbon%202027.md) and [u](<Trips/Lisbon 2027.md>)\n")
+        self.move(name="Lisbon 2027", to="Archive/Lisbon trip 2027")
+        self.assertEqual(self.text("Trips/Plan.md"), "[x](../Archive/Lisbon%20trip%202027.md#To%20do)\n")
+        self.assertEqual(self.text("Places/Alfama.md"), "[t](../Archive/Lisbon%20trip%202027.md)\n")
+        self.assertEqual(self.text("Inbox.md"),
+                         "[t](Archive/Lisbon%20trip%202027.md) and [u](<Archive/Lisbon trip 2027.md>)\n")
+        self.assertIn("Linked from: Inbox (2), Places/Alfama, Trips/Plan", self.read(name="Lisbon trip 2027"))
+
+    def test_the_moved_notes_own_links_still_reach_the_same_notes(self):
+        self.put("People/Mum.md", "x\n")
+        self.put("People/Dana.md", "[m](./Mum.md), [[Mum]], [[#Top]] and [[Dana#Top]]\n# Top\n")
+        out = self.move(name="Dana", to="Friends/")
+        self.assertIn("moved People/Dana to Friends/Dana", out)
+        self.assertIn("Its own links were adjusted (1)", out)
+        self.assertEqual(self.text("Friends/Dana.md"), "[m](../People/Mum.md), [[Mum]], [[#Top]] and [[Dana#Top]]\n"
+                                                       "# Top\n")
+
+    def test_repeated_names_resolve_to_the_same_notes_after_a_move(self):
+        self.put("Work/Plan.md", "work\n")
+        self.put("Home/Plan.md", "home\n")
+        self.put("Work/Notes.md", "[[Plan]]\n")       # its own folder's Plan: Work/Plan
+        self.put("Projects/Index.md", "[[Plan]]\n")   # no Plan here: Home/Plan comes first
+        out = self.move(name="Work/Plan", to="Projects/")
+        self.assertIn("moved Work/Plan to Projects/Plan", out)
+        self.assertEqual(self.text("Work/Notes.md"), "[[Projects/Plan]]\n")
+        self.assertEqual(self.text("Projects/Index.md"), "[[Home/Plan]]\n", "would have started to mean the moved note")
+
+    def test_refusals(self):
+        self.put("People/Juniper.md", "x\n")
+        self.put("Mum.md", "x\n")
+        with self.assertRaises(tools.ToolError) as e:
+            self.move(name="Juniper", to="Mum")
+        self.assertIn("already exists at Mum", str(e.exception))
+        with self.assertRaises(tools.ToolError) as e:
+            self.move(name="Juniper", to="People/Juniper")
+        self.assertIn("already there", str(e.exception))
+        with self.assertRaises(tools.ToolError) as e:
+            self.move(name="Juniper")
+        self.assertIn("'to' must be", str(e.exception))
+        with self.assertRaises(tools.ToolError):
+            self.move(name="Juniper", to="../outside")
+        with self.assertRaises(tools.ToolError):
+            self.move(Ctx(guest=True), name="Juniper", to="June")
+        with self.assertRaises(tools.ToolError):
+            self.move(Ctx(actor="review"), name="Juniper", to="June")
+        self.assertTrue((self.root / "People/Juniper.md").exists())
+
+    def test_a_big_move_asks_the_owner_first(self):
+        from unittest import mock
+        self.put("Hub.md", "x\n")
+        for i in range(3):
+            self.put(f"N{i}.md", "[[Hub]]\n")
+        asked = []
+
+        class Asking(Ctx):
+            def __init__(self, answer):
+                super().__init__()
+                self.answer = answer
+
+            def approve(self, req):
+                asked.append(req)
+                return self.answer
+
+        with mock.patch.object(notes, "MOVE_ASK_OVER", 2):
+            out = self.move(Asking("deny"), name="Hub", to="Center")
+            self.assertTrue(out.startswith("denied:"))
+            self.assertIn("update links in 3 notes", asked[0].title)
+            self.assertEqual(self.text("N0.md"), "[[Hub]]\n")
+            self.assertTrue((self.root / "Hub.md").exists())
+            self.move(Asking(True), name="Hub", to="Center")
+        self.assertEqual(self.text("N2.md"), "[[Center]]\n")
+
+    def test_a_move_is_reported(self):
+        self.put("A.md", "x\n")
+        self.put("B.md", "[[A]]\n")
+        ctx = Ctx()
+        self.move(ctx, name="A", to="Z")
+        self.assertEqual(ctx.note_changes, ["moved A to Z (1 linking notes updated)"])
+
+    def test_trash_keeps_the_file_and_names_what_still_links(self):
+        self.put("People/Juniper.md", "x\n")
+        self.put("A.md", "[[Juniper]]\n")
+        ctx = Ctx()
+        out = notes.trash_note(self.s, {"name": "Juniper"}, ctx)
+        self.assertIn("(.trash/People/Juniper.md in the notes folder)", out)
+        self.assertIn("1 note(s) still link to it", out)
+        self.assertEqual((self.root / ".trash/People/Juniper.md").read_text(encoding="utf-8"), "x\n")
+        self.assertEqual(ctx.note_changes, ["trashed People/Juniper"])
+        with self.assertRaises(tools.ToolError):
+            self.read(name="Juniper")
+        self.assertIn("Unresolved links (no such note): Juniper", self.read(name="A"))
+        self.put("People/Juniper.md", "again\n")
+        out = notes.trash_note(self.s, {"name": "Juniper"}, Ctx())
+        self.assertIn(".trash/People/Juniper 2.md", out)
+        with self.assertRaises(tools.ToolError):
+            notes.trash_note(self.s, {"name": "A"}, Ctx(guest=True))
+
+
+class OwnerViewTests(NotesBase):
+    def test_overview_and_one_note(self):
+        self.put("People/Juniper.md", "Sister. [[Mum]] [[Mum]] [[Dad]]\n")
+        view = notes.owner_view(self.s)
+        self.assertIn(f"Notes folder: {self.root}", view)
+        self.assertIn("1 note(s)", view)
+        self.assertIn("- People/Juniper (", view)
+        self.assertIn("Links to notes that don't exist (3): Mum (2), Dad", view)
+        one = notes.owner_view(self.s, "Juniper")
+        self.assertIn("Note: People/Juniper", one)
+        self.assertNotIn(notes.DATA_NOTE, one)
+        self.assertIn("No note called 'Nope'", notes.owner_view(self.s, "Nope"))
+        self.s.notes = False
+        self.assertIn("Notes are off", notes.owner_view(self.s))
+
+
 class AgentTests(NotesBase):
+    def test_memory_guidance_points_detail_at_notes_only_when_notes_are_on(self):
+        on = agent_mod.system_prompt(self.s, memory_snapshot="")
+        self.assertIn("move the detail into a note", on)
+        self.s.notes = False
+        self.assertNotIn("move the detail into a note", agent_mod.system_prompt(self.s, memory_snapshot=""))
+
     def test_owner_prompt_carries_the_frozen_vault_line_and_guests_get_nothing(self):
         self.put("People/Juniper.md", "x\n")
         self.put("People/Dana.md", "x\n")

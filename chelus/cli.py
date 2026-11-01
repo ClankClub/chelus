@@ -6,7 +6,7 @@ import argparse
 import sys
 import time
 
-from . import __version__, approval, curator, jobs, learn, memory, provider, review, skill_tools, skills
+from . import __version__, approval, curator, jobs, learn, memory, notes, provider, review, skill_tools, skills
 from .agent import LEARN_STEPS, Agent
 from .config import ConfigError, Settings, load_api_key, load_settings
 from .store import SessionBusy, Store
@@ -14,7 +14,7 @@ from .store import SessionBusy, Store
 EXIT_OK, EXIT_PROVIDER, EXIT_CONFIG, EXIT_INTERRUPT = 0, 1, 2, 130
 
 CHAT_HELP = ("Commands: /new starts a fresh conversation, /learn [what] turns something into a skill, "
-             "/memory shows what Chelus remembers, /approvals [revoke ID|clear] manages tool grants, "
+             "/memory shows what Chelus remembers, /notes the notes folder, /approvals [revoke ID|clear] manages tool grants, "
              "/quit exits. Ctrl-C cancels the current reply. "
              "More: chelus skills --help, chelus memory --help")
 CHOICE_KEYS = {"o": approval.ONCE, "y": approval.ONCE, "yes": approval.ONCE, "s": approval.SESSION,
@@ -91,6 +91,9 @@ def cmd_chat(s: Settings, args: argparse.Namespace) -> int:
                 continue
             if line == "/memory":
                 print(memory.owner_view(s))
+                continue
+            if line == "/notes" or line.startswith(("/notes ", "/note ")):
+                print(notes.owner_view(s, line.split(" ", 1)[1] if " " in line else ""))
                 continue
             api_text, steps = None, None
             if line == "/learn" or line.startswith("/learn "):
@@ -251,6 +254,11 @@ def cmd_skills(s: Settings, args: argparse.Namespace) -> int:
         store.close()
 
 
+def cmd_notes(s: Settings, args: argparse.Namespace) -> int:
+    print(notes.owner_view(s, " ".join(args.name)))
+    return EXIT_OK
+
+
 def cmd_memory(s: Settings, args: argparse.Namespace) -> int:
     if args.action == "show":
         print(memory.owner_view(s))
@@ -378,6 +386,8 @@ def build_parser() -> argparse.ArgumentParser:
                     help="show (default); forget user|memory N; path (where the files are, to edit by hand). "
                          "Changes the background review proposes are under: chelus skills pending")
     me.add_argument("rest", nargs="*")
+    no = sub.add_parser("notes", help="the notes folder: recent notes and broken links; or show one note")
+    no.add_argument("name", nargs="*", help="a note's name or path, to show that note")
     return p
 
 
@@ -386,7 +396,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command is None:
         args = build_parser().parse_args(["chat", *(argv if argv is not None else sys.argv[1:])])
     handlers = {"chat": cmd_chat, "ask": cmd_ask, "sessions": cmd_sessions, "show": cmd_show,
-                "telegram": cmd_telegram, "usage": cmd_usage, "skills": cmd_skills, "memory": cmd_memory,
+                "telegram": cmd_telegram, "usage": cmd_usage, "skills": cmd_skills, "memory": cmd_memory, "notes": cmd_notes,
                 "approvals": cmd_approvals, "cron": cmd_cron}
     try:
         s = load_settings()

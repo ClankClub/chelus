@@ -23,7 +23,7 @@ import urllib.request
 from collections import deque
 from typing import Any
 
-from . import approval, cron, curator, jobs, learn, memory, provider, review, skill_tools, skills
+from . import approval, cron, curator, jobs, learn, memory, notes, provider, review, skill_tools, skills
 from .agent import LEARN_STEPS, Agent
 from .config import ConfigError, Settings, load_api_key
 from .stats import RuntimeStats, StatsPreferences
@@ -48,6 +48,8 @@ HELP = (
     "/undo <skill>  undo the last change to a skill\n"
     "/memory  what I remember about you and this phone\n"
     "/memory forget user|memory N  delete entry N\n"
+    "/notes  the notes folder: recent notes, broken links\n"
+    "/note NAME  show one note\n"
     "/cron  scheduled jobs; /cron pause|resume|run|remove JOB\n"
     "/stop  cancel an automatic retry while DeepSeek is down\n"
     "/stats [on|off|info]  toggle/set runtime footer, or show telemetry\n"
@@ -64,7 +66,7 @@ GUEST_HELP = (
     "/stats reset  restore default mem/cpu/bat and enable footer\n"
     "/help  this message"
 )
-OWNER_ONLY = ("/learn", "/skills", "/pending", "/undo", "/memory", "/approvals", "/cron")
+OWNER_ONLY = ("/learn", "/skills", "/pending", "/undo", "/memory", "/notes", "/note", "/approvals", "/cron")
 # The "/" menu Telegram shows while typing. Guests see the short list everywhere; the owner's
 # chat gets the full one. (command, description, owner only)
 MENU = (
@@ -74,6 +76,8 @@ MENU = (
     ("pending", "Show skill changes waiting for your OK", True),
     ("undo", "Undo the last change to a skill: /undo <skill>", True),
     ("memory", "What I remember about you and this phone", True),
+    ("notes", "The notes folder: recent notes and broken links", True),
+    ("note", "Show one note: /note NAME", True),
     ("cron", "Scheduled jobs: /cron pause|resume|run|remove JOB", True),
     ("approvals", "Ordinary tool grants: /approvals revoke ID|clear", True),
     ("stats", "Runtime footer: /stats on|off|info|add|remove|reset", False),
@@ -562,6 +566,12 @@ class Bridge:
         if command == "/memory":
             self.memory_command(chat_id, arg)
             return
+        if command in ("/notes", "/note"):
+            if command == "/note" and not arg.strip():
+                self._send(chat_id, "Usage: /note NAME (the note's name or path)")
+            else:
+                self._send(chat_id, notes.owner_view(self.s, arg))
+            return
         if command == "/cron":
             self.cron_command(chat_id, arg)
             return
@@ -622,7 +632,7 @@ class Bridge:
         # Every memory write is shown, so a claimed save that never happened is visible.
         notes = "".join(f"[remembered] {n}\n" for n in agent.memory_notes)
         notes += "".join(f"[note] {n}\n" for n in getattr(agent, "note_changes", []))
-        used = [t for t in dict.fromkeys(agent.tools_ok) if t not in ("memory", "note_write", "note_edit")]
+        used = [t for t in dict.fromkeys(agent.tools_ok) if t not in ("memory", "note_write", "note_edit", "note_move", "note_trash")]
         if used:  # only tools that actually ran, not denied or failed calls
             notes = f"[used {', '.join(used)}]\n" + notes
         reply = notes + reply
