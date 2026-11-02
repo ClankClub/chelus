@@ -11,7 +11,7 @@ The phone runs this repository's code, deployed with `scripts/deploy.sh`. Integr
 - [x] Scheduling: jobs, delivery to Telegram, script jobs, `/cron` (2026-10-31).
 - [x] Restart after a reboot through Termux:Boot (2026-11-01, about two minutes on the A10e).
 - [x] Docs and product site match the code (2026-11-01).
-- [ ] A clean install from the public repository, in a fresh folder with fresh config, following only the README.
+- [x] A clean install from the public repository, in a fresh folder with fresh config, following only the README (2026-11-01 on the A10e: `ask`, memory, a note, `notes --check`, a scheduled job and chat worked; 475 tests pass on the clone).
 - [ ] Telegram flows tapped through live by the owner: an approval card's buttons, a `/pending` card (skill, memory or note change), the `edit_file` diff card, the command menu.
 - [ ] A week of unattended running with a daily job, its runs on record. The owner reports the bridge staying up for days, but no run since the reboot fix has been logged end to end.
 - [ ] Tag `v1.0.0` and set `__version__`.
