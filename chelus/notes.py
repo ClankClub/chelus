@@ -91,7 +91,8 @@ def unlistable(root: Path) -> str:
     # notes were written and then the vault looked empty.
     return (f"Chelus can't list the notes folder {root} (permission denied), so it can't see the notes in it. "
             "If it is in shared storage, run termux-setup-storage in Termux and allow access to files "
-            "(Android resets that permission for apps it thinks are unused), or set notes_dir back to "
+            "(Settings can show Storage as allowed while reading is off; switching it to Deny and back "
+            "to Allow fixes that), or set notes_dir back to "
             "private storage. Nothing was changed.")
 
 
