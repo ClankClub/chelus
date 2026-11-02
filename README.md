@@ -108,6 +108,8 @@ This helper reads metrics only, starts no service, and must be restarted after a
 (nohup setsid chelus telegram > ~/.local/share/chelus/telegram.log 2>&1 < /dev/null &)
 ```
 
+To start the bridge after a reboot, install the Termux:Boot app, open it once, and copy the boot script: `mkdir -p ~/.termux/boot && cp scripts/termux-boot-chelus.sh ~/.termux/boot/start-chelus && chmod 700 ~/.termux/boot/start-chelus`. It takes a wake lock and starts the bridge unless one is already running. On the A10e the bridge was back about two minutes after a reboot. Termux:Boot runs each script in that folder, so an `sshd` line in a second script brings SSH back too.
+
 ## Scheduled jobs
 
 A job is a prompt that runs on a schedule; its reply arrives as a Telegram message. Jobs run only while the Telegram bridge is running.
