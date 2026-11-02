@@ -170,6 +170,14 @@ Conversation history, memories, and skills are stored locally under `~/.local/sh
 
 With shell access, Chelus can drive other command-line tools and HTTPS APIs. On the owner's phone it has sent email through an API, deployed sites with the Vercel CLI, and worked over wireless ADB. None of those ship with Chelus or are part of 1.0; each needs its own packages, accounts and credentials. [docs/STATUS.md](docs/STATUS.md) lists what was seen working.
 
+**Keys for your own integrations.** Chelus's file tools can't read its config folder, and its skill and memory scanners refuse key paths, so it can't remember where a key file is. Give it an environment variable instead. The launcher reads `~/.config/chelus/env`, a shell file of `export` lines, before every start, Termux:Boot included:
+
+```sh
+export AGENTMAIL_API_KEY="$(cat "$HOME/.config/chelus/agentmail_api_key")"
+```
+
+Keep it private (`chmod 600`). Shell commands Chelus runs inherit these variables; scheduled-job scripts don't see any whose name looks like a key, token or secret. The file is run as shell code at every start, so treat it like `~/.bashrc`.
+
 ## Configuration
 
 Optional settings go in `~/.config/chelus/config.toml`. For example:
