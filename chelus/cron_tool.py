@@ -16,6 +16,7 @@ read. One tool with an action argument keeps the schema small. Choices made here
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from . import approval, cron, cron_scan, schedule, tools
@@ -67,12 +68,34 @@ def _text(args: dict[str, Any], key: str) -> str | None:
     return value
 
 
+# "reply with exactly: NO_MESSAGE" and the like: a made-up nothing-to-report word that the
+# runner doesn't know, so it reaches the owner as a message. Only [SILENT] stays silent.
+_EXACT_REPLY = re.compile(
+    r"\b(?:reply|respond|answer|output|return|say|send)\b[^.\n]{0,30}?\bexactly\b[\s:]*[`\"']?(\[?[A-Za-z_]{2,}\]?)")
+_SENTINEL_WORDS = {"NONE", "NOTHING", "SKIP", "QUIET", "SILENCE", "EMPTY", "NOOP", "NULL", "OK", "NA"}
+
+
+def _bad_sentinel(prompt: str) -> str | None:
+    for m in _EXACT_REPLY.finditer(prompt):
+        word = m.group(1)
+        if word.upper() in cron.SILENT_MARKERS or word.upper() == cron.FAILURE_MARKER:
+            continue
+        if word.isupper() and ("_" in word or word.startswith("[") or word.strip("[]") in _SENTINEL_WORDS):
+            return word
+    return None
+
+
 def _check(store: Any, args: dict[str, Any], action: str) -> None:
     """Everything that can be refused is refused before the owner is asked."""
     sched = _text(args, "schedule")
     prompt = _text(args, "prompt")
     if prompt is not None and (blocked := cron_scan.scan(prompt)):
         raise tools.ToolError(blocked)
+    if prompt is not None and (word := _bad_sentinel(prompt)):
+        raise tools.ToolError(
+            f"The prompt has the job reply exactly {word} when there is nothing to report, but only [SILENT] "
+            f"sends nothing: any other reply, {word} included, reaches the owner as a message. Use "
+            "'otherwise reply exactly [SILENT]' instead.")
     if sched is not None:
         try:
             schedule.parse(sched)

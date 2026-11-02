@@ -2,7 +2,7 @@
 import time
 import unittest
 
-from chelus import approval, cron, cron_scan, tools
+from chelus import approval, cron, cron_scan, cron_tool, tools
 from chelus.schedule import local_epoch
 from tests.test_agent import Base, FakeModel, tool_call
 from tests.test_cron import T0, CronBase, reply
@@ -98,6 +98,20 @@ class ToolTests(Base):
                 self.call(**args)
         self.assertEqual(self.asked, [])
         self.assertEqual(self.store.cron_jobs(), [])
+
+    def test_a_made_up_silence_word_is_refused(self):
+        # The live job that sent the owner "NO_MESSAGE" every weekday morning.
+        bad = ("Call the battery_status tool once.\n\nIf the battery level is below 30 percent, reply with one "
+               "short line.\n\nIf the battery level is 30 percent or higher, reply with exactly: NO_MESSAGE")
+        for prompt in (bad, "Otherwise respond exactly `NOTHING`.", "Otherwise reply exactly [NONE]"):
+            with self.assertRaises(tools.ToolError, msg=prompt) as e:
+                self.call(action="create", schedule="in 30m", prompt=prompt)
+            self.assertIn("[SILENT]", str(e.exception))
+        self.assertEqual(self.asked, [])
+        for prompt in ("If it's fine, reply exactly [SILENT].", "Otherwise reply exactly SILENT",
+                       "Reply exactly with the battery level and nothing else.",
+                       "Say exactly Hello to the owner."):
+            self.assertIsNone(cron_tool._bad_sentinel(prompt), prompt)
 
     def test_list_pause_need_no_approval(self):
         self.assertEqual(self.call(action="list"), "There are no scheduled jobs.")
