@@ -21,7 +21,7 @@ Chelus is a Python standard-library-only AI agent for 32-bit Android/Termux, ins
 - `web.py`, `spill.py`: `web_fetch`/`web_search` with the public-address guard, and long tool output saved for `read_file` paging.
 - `skills.py`, `skill_tools.py`, `skill_guard.py`, `learn.py`, `review.py`, `curator.py`: skills, scanning, background review and archival.
 - `memory.py`, `session_search.py`: MEMORY/USER stores and FTS5 history search.
-- `notes.py`: the Markdown notes vault (parse, link resolution, SQLite index, the six notes tools, link rewriting on move, the `/notes` owner view); design in `docs/NOTES.md`.
+- `notes.py`: the Markdown notes vault (parse, link resolution, SQLite index, the six notes tools, link rewriting on move, the review's staged changes, the lint pass, the `/notes` owner view); design in `docs/NOTES.md`.
 - `schedule.py`, `cron.py`, `cron_tool.py`, `cron_scan.py`: schedule parsing, scheduled jobs, the unattended runner and tick, the model's `cron` tool and the job-prompt scan.
 - `cli.py`, `telegram.py`, `stats.py`: user interfaces and optional telemetry.
 - All modules above are under `chelus/`. Tests live in `tests/`; `scripts/deploy.sh` stages and tests on the phone before installing.

@@ -1,6 +1,6 @@
 # Notes: design
 
-Status: phases 1 and 2 built and benched (2026-11-01). Phase 3 is still design.
+Status: phases 1 to 3 built and benched (2026-11-01). Shared storage is not yet verified on the phone (see Verify on the phone).
 
 ## What it is
 
@@ -67,7 +67,7 @@ Six tools. The design had three, with every change in one `note_write`; on the b
 - **`note_read(name, section?, page?)`** takes a link target, a path or an alias, or the start of a name when exactly one note fits ("Dana" finds "Dana Okafor"; several fits are listed). Otherwise it suggests close names. It returns the frontmatter, the body (paged at about 6,000 characters like `skill_view`, or just the named `section` heading), the outgoing links with unresolved ones flagged, the backlinks, and a short `rev` (the content hash). A `section` that doesn't exist returns the whole note with the real headings named, because small models guess section names and give up on an error.
 - **`note_write(action, name, content, ...)`** creates and adds. Every write takes the vault lock, re-reads the file inside it and replaces it atomically:
   - `create` (`content`, optional `tags`, `aliases`) fails if the path exists or the file name is taken elsewhere, and says how to link to the new note.
-  - `append` (`content`, optional `section`) adds at the end of the note or of a heading's section. This is the common case for logs and running lists.
+  - `append` (`content`, optional `section`) adds at the end of the note or of a heading's section. This is the common case for logs and running lists. A `section` that doesn't exist adds at the end and names the real headings, because GPT-OSS 20B, told the section was missing, gave up instead of retrying.
   - `replace` (`content`, `rev`) rewrites the whole note's text, but only if `rev` matches what `note_read` returned. If someone edited the note since, it fails and says to read it again. When the new content has no frontmatter, the old properties are kept: `note_read` shows them apart from the text, and models rewriting from that text dropped them.
 - **`note_edit(name, old_text, new_text)`** is a find-and-replace using `edit.py`'s matching and reindenting, so it works on files the owner also edits. `old_text` must match once. A repeat of an edit already applied reports no change instead of applying it twice.
 
@@ -98,13 +98,15 @@ With notes on, the memory guidance gains one sentence (move the detail into a no
 
 ## Background review
 
-It can't write notes in the first version. The memory review already proves the add-only, pending-approval pattern. Notes get it after the foreground tools have run on the phone for a while: creates and appends apply, while edits, moves and trash wait for the owner. That is the same split as memory.
+With notes on, the memory review (every `memory_review_interval` owner messages) also gets `notes_search`, `note_read`, `note_write` and `note_edit`, and a short section of its prompt: details about other people, places, projects and plans go in notes, not either memory store, even when mentioned in passing; search first, append to the note on that topic, create only for a new topic. The routing sentence is there because GPT-OSS 20B filed a friend's details in the owner's user profile.
+
+The split is memory's: creates and appends apply at once and are reported ("Memory review: notes: added to People/Dana"). Edits and rewrites, and any write the scanner flags, are staged in the pending queue shared with skill and memory changes, pinned to the note's `rev`. The owner sees a card with the diff (`/pending`, `chelus skills pending`); if the note changed since, the card says approving would fail, and approving drops it without writing. The review can't move or trash notes: nothing a conversation review finds needs that, and a rename touches other notes. If memory is off (`memory = false`), there is no memory review, so notes get none either.
 
 ## Phases
 
 1. **Core (built):** `notes.py` (parse, resolve, index, sync, the write operations), the search, read, write and edit tools, the prompt section, `off_limits`, settings and tests (`tests/test_notes.py`), and two bench scenarios: `notes-recall` (save details about a person, recall them after `/new`) and `notes-vault` (an existing Obsidian-style vault: find the list, name a note that links to it, add to one section without touching the rest). Last run, 2026-11-01: DeepSeek Flash 22/22, GPT-OSS 20B 21/22 (it once failed to name the linking note).
 2. **Links (built):** `note_move` with link rewriting, `note_trash`, the owner commands, the memory-guidance pointer, and a third bench scenario, `notes-move` (rename a person's note so a wikilink and a relative Markdown link follow it, and bin another note). On 2026-11-01 DeepSeek Flash passed it 2/2 and GPT-OSS 20B 4/5; the miss went looking with the file tools and never tried the notes tools. Live on the phone, one message renamed a note with both kinds of link pointing at it and trashed another.
-3. **Review and shared storage:** the background review writing notes (staged as above), `notes_dir` on shared storage verified on the phone (atomic replace, mtime precision, Markor round trip), and a lint pass in the curator that reports broken links and orphan notes.
+3. **Review, lint and shared storage (built, except the shared-storage round trip):** the background review writing notes (above); a lint pass, `notes.lint`, reporting links that point at nothing, notes nothing links to (oldest first), names used by more than one note, and notes too big or not UTF-8 for search. The weekly curator runs it and reports only when the findings differ from its last report; `/notes check` and `chelus notes --check` always show it. It never fixes anything. A vault folder that can't be listed now fails every notes tool with the fix, instead of looking empty. Bench scenario `notes-review` (`review = true` in the simulator): the owner mentions a friend's news while asking about dinner, and her existing note should get it once, with its text untouched. On 2026-11-01 DeepSeek Flash passed it 7/7 on every run (it usually files the details during the turn, and the review then adds nothing); GPT-OSS 20B's review passed 4 of 5 runs after the append fallback, and about half before, its misses being the wrong store, giving up after an error, and doing nothing.
 
 ## Verify on the phone
 
@@ -113,5 +115,5 @@ Mock tests aren't enough for these:
 - Cold index of 2,000 notes (about 20 MB) under 60 seconds. Measured 19 s on the A10e (2026-11-01), with a 34 MB index.
 - A search under 300 ms. Measured 212 ms at 2,000 notes, most of it the freshness walk.
 - The freshness walk under 100 ms on an unchanged vault. Measured 108 ms at 2,000 notes, after the walk moved to `os.scandir` and opening the index stopped writing to it (it was 273 ms). Reading a note takes about 190 ms and an append about 460 ms at that size; a vault of a few hundred notes is well under these.
-- Atomic replace and mtime behaviour on shared storage.
+- Shared storage (2026-11-01, Android 11, throwaway folder under `Documents`). mtimes there are nanosecond-precise, and the folder is case-insensitive, which `note_move` handles (a case-only rename works). But Termux's `READ_EXTERNAL_STORAGE` was revoked (Android resets permissions of apps it thinks unused; Termux runs mostly over SSH) while write stayed granted. In that state Termux can create files and read them back but can't list any folder, so notes were written and then the vault looked empty, and one `os.replace` of a hidden temp file over an existing note was refused. The first is now caught and explained (see phase 3). Still to run with the permission back on: the probe (`notes-perf/shared_probe.py` on the junk shelf), atomic replace, an edit made outside Termux, and a Markor round trip.
 - A vault written by Chelus opening cleanly in Obsidian on a PC, and an Obsidian-made vault reading cleanly in Chelus.

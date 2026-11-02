@@ -313,9 +313,12 @@ def apply_pending(s: Any, store: Any, pid: str) -> str:
     rec = store.get_pending(pid)
     if rec is None:
         return f"no pending change {pid}"
-    if rec["origin"] == "memory_review":  # the queue is shared with memory changes
+    if rec["origin"] == "memory_review":  # the queue is shared with memory and note changes
         from . import memory
         return memory.apply_pending(s, store, rec)
+    if rec["origin"] == "notes_review":
+        from . import notes
+        return notes.apply_pending(s, store, rec)
     store.drop_pending(pid)
     base = skills.root(s)
     try:
@@ -334,6 +337,9 @@ def pending_card(rec: dict[str, Any], s: Any) -> str:
     if rec["origin"] == "memory_review":
         from . import memory
         return memory.pending_card(rec, s)
+    if rec["origin"] == "notes_review":
+        from . import notes
+        return notes.pending_card(rec, s)
     base = skills.root(s)
     purpose = rec["payload"].get("purpose") or ""
     try:

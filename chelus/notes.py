@@ -26,13 +26,16 @@ import json
 import os
 import posixpath
 import re
+import secrets
 import sqlite3
 import time
+from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
+from types import SimpleNamespace
 from typing import Any, Iterator
 from urllib.parse import unquote
 
-from . import approval, edit, skill_guard, skills, tools
+from . import approval, edit, memory, skill_guard, skills, tools
 from .tools import ToolError
 
 try:
@@ -80,6 +83,16 @@ def _locked(s: Any) -> Iterator[None]:
         finally:
             if fcntl is not None:
                 fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+
+
+def unlistable(root: Path) -> str:
+    # Seen on the A10e (Android 11, 2026-11-01): without the storage permission, Termux can
+    # still create files in shared storage and read them back, but can't list any folder, so
+    # notes were written and then the vault looked empty.
+    return (f"Chelus can't list the notes folder {root} (permission denied), so it can't see the notes in it. "
+            "If it is in shared storage, run termux-setup-storage in Termux and allow access to files "
+            "(Android resets that permission for apps it thinks are unused), or set notes_dir back to "
+            "private storage. Nothing was changed.")
 
 
 # ---- parsing ----
@@ -378,6 +391,10 @@ class Index:
             prefix, folder = stack.pop()
             try:
                 entries = os.scandir(folder)
+            except PermissionError:
+                if not prefix:
+                    raise NoteError(unlistable(self.root)) from None
+                continue
             except OSError:  # includes a vault folder that doesn't exist yet
                 continue
             with entries:
@@ -853,7 +870,7 @@ def _content(args: dict[str, Any], key: str = "content", allow_empty: bool = Fal
     return c.replace("\r\n", "\n")
 
 
-def _create(s: Any, idx: Index, args: dict[str, Any]) -> tuple[str, str]:
+def _create(s: Any, idx: Index, args: dict[str, Any]) -> Planned:
     rel = check_name(args.get("name"))
     content = _content(args)
     names = idx.names()
@@ -878,9 +895,27 @@ def _create(s: Any, idx: Index, args: dict[str, Any]) -> tuple[str, str]:
     full = _inside_vault(s, rel)
     if full.exists():
         raise NoteError(f"{rel[:-3]} already exists")
-    _write_atomic(full, text)
     link = Names(names.paths + [rel]).link_form(rel)
-    return rel, f"created {rel[:-3]}; link to it as [[{link}]].{flag}"
+    return Planned(rel, f"created {rel[:-3]}; link to it as [[{link}]].{flag}", full, "", text, flag=flag)
+
+
+@dataclass
+class Planned:
+    """A note change worked out but not yet written: the actions plan, write_note decides
+    whether to write it now or stage it for the owner."""
+    path: str
+    msg: str                  # the result line, as it reads once written
+    full: Path | None = None  # None: nothing to write ("no change")
+    before: str = ""
+    after: str = ""
+    bom: bool = False
+    crlf: bool = False
+    rev: str | None = None    # rev of the file this was planned against; None for a new note
+    flag: str = ""            # what the scanner flagged, if anything
+
+    def write(self) -> None:
+        assert self.full is not None
+        _write_atomic(self.full, _encode(self.after, self.bom, self.crlf))
 
 
 def _existing(s: Any, idx: Index, args: dict[str, Any]) -> tuple[str, Path, str, bool, bool, bytes]:
@@ -892,17 +927,17 @@ def _existing(s: Any, idx: Index, args: dict[str, Any]) -> tuple[str, Path, str,
     return path, full, text, bom, crlf, raw
 
 
-def _finish(full: Path, path: str, before: str, after: str, bom: bool, crlf: bool, what: str) -> str:
+def _finish(full: Path, path: str, before: str, after: str, bom: bool, crlf: bool, what: str,
+            raw: bytes) -> Planned:
     if len(after) > NOTE_MAX_CHARS:
         raise NoteError(f"{path[:-3]} would be {len(after):,} characters; the limit is {NOTE_MAX_CHARS:,}. "
                         "Start a new note and link to it.")
     flag = _scan(after, before)
-    _write_atomic(full, _encode(after, bom, crlf))
-    return f"{what} {path[:-3]}.{flag}"
+    return Planned(path, f"{what} {path[:-3]}.{flag}", full, before, after, bom, crlf, rev_of(raw), flag)
 
 
-def _edit(s: Any, idx: Index, args: dict[str, Any]) -> tuple[str, str]:
-    path, full, text, bom, crlf, _ = _existing(s, idx, args)
+def _edit(s: Any, idx: Index, args: dict[str, Any]) -> Planned:
+    path, full, text, bom, crlf, raw = _existing(s, idx, args)
     old, new = _content(args, "old_text"), _content(args, "new_text", allow_empty=True)
     if old == new:
         raise NoteError("old_text and new_text are the same; nothing to change")
@@ -912,10 +947,11 @@ def _edit(s: Any, idx: Index, args: dict[str, Any]) -> tuple[str, str]:
         # inside the new text already, this edit was applied before; don't apply it twice.
         done = [(i, i + len(new_used)) for i in range(len(text)) if text.startswith(new_used, i)]
         if all(any(s <= a and b <= e for s, e in done) for a, b in hits):
-            return path, f"no change: new_text is already in {path[:-3]}, so this edit looks already applied"
+            return Planned(path, f"no change: new_text is already in {path[:-3]}, so this edit looks already "
+                           "applied", rev=rev_of(raw))
     if not hits:
         if new.strip() and new in text:
-            return path, f"no change: new_text is already in {path[:-3]}"
+            return Planned(path, f"no change: new_text is already in {path[:-3]}", rev=rev_of(raw))
         hint = edit._closest(text, old)
         raise NoteError(f"old_text wasn't found in {path[:-3]}. Read the note again with note_read and copy the "
                         "text exactly." + (f"\n{hint}".replace("old_string", "old_text") if hint else ""))
@@ -928,20 +964,23 @@ def _edit(s: Any, idx: Index, args: dict[str, Any]) -> tuple[str, str]:
     if "indentation" in strategy or "quotes" in strategy:
         repl = edit._reindent(new_used, text[a:b].split("\n", 1)[0], old_used.split("\n", 1)[0])
     after = text[:a] + repl + text[b:]
-    return path, _finish(full, path, text, after, bom, crlf, "edited")
+    return _finish(full, path, text, after, bom, crlf, "edited", raw)
 
 
-def _append(s: Any, idx: Index, args: dict[str, Any]) -> tuple[str, str]:
-    path, full, text, bom, crlf, _ = _existing(s, idx, args)
+def _append(s: Any, idx: Index, args: dict[str, Any]) -> Planned:
+    path, full, text, bom, crlf, raw = _existing(s, idx, args)
     add = _content(args).strip("\n")
     section = args.get("section")
+    span, missed = None, ""
     if isinstance(section, str) and section.strip():
         fm, body, body_line = split_frontmatter(text)
         span = section_span(body, section)
         if span is None:
+            # A guessed section adds at the end instead of failing: on the bench (2026-11-01)
+            # GPT-OSS 20B, told the section didn't exist, gave up rather than retry without it.
             heads = ", ".join(h[1] for h in find_headings(strip_code(body))[:20]) or "none"
-            raise NoteError(f"{path[:-3]} has no section {section!r}. Its headings: {heads}. "
-                            "Leave 'section' out to add at the end.")
+            missed = f" (it has no section {section.strip()!r}; its headings: {heads})"
+    if span is not None:
         lines = text.split("\n")
         end = body_line - 1 + span[1]          # index in all lines of the next heading (or len)
         start = end
@@ -954,10 +993,13 @@ def _append(s: Any, idx: Index, args: dict[str, Any]) -> tuple[str, str]:
     else:
         after = text.rstrip("\n") + ("\n" if text.strip() else "") + add + "\n"
         where = "added to the end of"
-    return path, _finish(full, path, text, after, bom, crlf, where)
+    plan = _finish(full, path, text, after, bom, crlf, where, raw)
+    if missed:
+        plan.msg = plan.msg[:-1] + missed + "." if plan.msg.endswith(".") else plan.msg + missed
+    return plan
 
 
-def _replace(s: Any, idx: Index, args: dict[str, Any]) -> tuple[str, str]:
+def _replace(s: Any, idx: Index, args: dict[str, Any]) -> Planned:
     path, full, text, bom, crlf, raw = _existing(s, idx, args)
     rev = args.get("rev")
     if not isinstance(rev, str) or not rev.strip():
@@ -976,7 +1018,9 @@ def _replace(s: Any, idx: Index, args: dict[str, Any]) -> tuple[str, str]:
     if old_fm is not None and split_frontmatter(content)[0] is None:
         content = "---\n" + old_fm + "\n---\n" + content.lstrip("\n")
         kept = " (its properties were kept)"
-    return path, _finish(full, path, text, content, bom, crlf, "rewrote") + kept
+    plan = _finish(full, path, text, content, bom, crlf, "rewrote", raw)
+    plan.msg += kept
+    return plan
 
 
 ACTIONS = {"create": _create, "edit": _edit, "append": _append, "replace": _replace}
@@ -984,7 +1028,15 @@ WRITE_ACTIONS = ("create", "append", "replace")  # note_write; edit is its own t
 DONE = {"create": "created", "edit": "edited", "append": "added to", "replace": "rewrote"}
 
 
-def write_note(s: Any, args: dict[str, Any], ctx: Any = None) -> str:
+REVIEW_STAGES = ("edit", "replace")  # the background review's changes to existing text wait for the owner
+_ANY = object()
+
+
+def write_note(s: Any, args: dict[str, Any], ctx: Any = None, pin: Any = _ANY) -> str:
+    """Create, append, replace or edit. The background review's creates and appends apply
+    (add-only, like its memory adds); its edits and rewrites, and anything the scanner
+    flags, are staged for the owner. `pin`: the rev an approved change was proposed
+    against; if the note changed since, nothing is written."""
     _may_write(ctx)
     action = args.get("action")
     if action == "edit" and "old_text" not in args:
@@ -992,21 +1044,86 @@ def write_note(s: Any, args: dict[str, Any], ctx: Any = None) -> str:
     if action not in ACTIONS:
         raise NoteError(f"'action' must be one of {', '.join(WRITE_ACTIONS)} (got {action!r}); "
                         "to change part of a note use note_edit")
+    review = getattr(ctx, "actor", "foreground") == "review"
     with _locked(s):
         with opened(s) as idx:
             if idx.over_limit and action == "create":
                 raise NoteError(f"the notes folder has more than {MAX_NOTES:,} notes; Chelus won't add more")
-            path, result = ACTIONS[action](s, idx, args)
+            plan = ACTIONS[action](s, idx, args)
+            if pin is not _ANY and plan.rev != pin:
+                raise NoteError(f"{plan.path[:-3]} " + ("was created" if pin is None else "changed")
+                                + " since this change was proposed; nothing was written")
+            if plan.full is not None and review and (action in REVIEW_STAGES or plan.flag):
+                return _stage(ctx, action, args, plan)
+            if plan.full is not None:
+                plan.write()
+            path, result = plan.path, plan.msg
             idx.touched([path])
             idx.sync()
-            if action == "create" or not result.startswith("no change"):
+            if plan.full is not None:
                 missing = [raw for _, raw, target in idx.outgoing(path) if target is None]
                 if missing:
                     result += (" Links to notes that don't exist yet: "
                                + ", ".join(dict.fromkeys(missing[:8])) + ".")
-    if not result.startswith("no change"):
+    if plan.full is not None:
         _log_change(ctx, f"{DONE[action]} {path[:-3]}")
     return result
+
+
+# ---- the background review's staged changes ----
+
+ORIGIN = "notes_review"
+
+
+def _stage(ctx: Any, action: str, args: dict[str, Any], plan: Planned) -> str:
+    """Queue a change for the owner, pinned to the note's rev, so it can't later land on a
+    note that was edited in the meantime. The queue is shared with skill and memory changes."""
+    store = getattr(ctx, "store", None)
+    if store is None:
+        raise NoteError("this change needs the owner's approval and can't be queued here")
+    if len(store.pending()) >= memory.PENDING_CAP:
+        raise NoteError(f"the owner already has {memory.PENDING_CAP} changes waiting; propose nothing more")
+    pid = secrets.token_hex(3)
+    gist = f"note {plan.path[:-3]}: {DONE[action]}" + (f" ({plan.flag.strip()})" if plan.flag else "")
+    store.add_pending(pid, getattr(ctx, "session_id", None), ORIGIN, f"note:{plan.path}", gist,
+                      {"action": action, "args": {k: v for k, v in args.items() if k != "action"},
+                       "rev": plan.rev})
+    staged = getattr(ctx, "staged", None)
+    if isinstance(staged, list):
+        staged.append(pid)
+    return f"staged for the owner's approval as change {pid}: {gist}. Not saved yet; don't repeat it."
+
+
+def apply_pending(s: Any, store: Any, rec: dict[str, Any]) -> str:
+    p = rec["payload"]
+    store.drop_pending(rec["id"])
+    ctx = SimpleNamespace(actor="approved", guest=False, note_changes=[], on_event=None)
+    try:
+        return "saved: " + write_note(s, {**p["args"], "action": p["action"]}, ctx, pin=p.get("rev"))
+    except (NoteError, OSError, KeyError) as e:
+        return f"change {rec['id']} could not be applied ({e}); it was dropped"
+
+
+DIFF_LINES = 40
+
+
+def pending_card(rec: dict[str, Any], s: Any) -> str:
+    """What the change would do to the note as it is now."""
+    p = rec["payload"]
+    head = f"Note change {rec['id']} proposed by the background review\n{rec['gist']}"
+    try:
+        with opened(s) as idx:
+            plan = ACTIONS[p["action"]](s, idx, {**p["args"], "action": p["action"]})
+        if plan.rev != p.get("rev"):
+            raise NoteError("the note changed since this was proposed, so approving it would fail")
+        lines = list(difflib.unified_diff(plan.before.split("\n"), plan.after.split("\n"), plan.path,
+                                          plan.path, n=1, lineterm=""))[2:]
+        if len(lines) > DIFF_LINES:
+            lines = lines[:DIFF_LINES] + [f"... ({len(lines) - DIFF_LINES} more lines)"]
+        detail = "\n".join(lines) or "(no change)"
+    except (NoteError, KeyError) as e:
+        detail = f"(would fail now: {e})"
+    return f"{head}\n\n{detail}"
 
 
 def _log_change(ctx: Any, short: str) -> None:
@@ -1020,11 +1137,11 @@ def _log_change(ctx: Any, short: str) -> None:
         ctx.on_event("notes", short)
 
 
-def _may_write(ctx: Any) -> None:
+def _may_write(ctx: Any, review: bool = True) -> None:
     if getattr(ctx, "guest", False):
         raise NoteError("notes are the owner's; guests can't change them")
-    if getattr(ctx, "actor", "foreground") == "review":
-        raise NoteError("the background review doesn't write notes yet")
+    if not review and getattr(ctx, "actor", "foreground") == "review":
+        raise NoteError("the background review doesn't move or trash notes; leave that to the owner")
 
 
 # ---- rewriting links (move) ----
@@ -1188,7 +1305,7 @@ def _plan_move(s: Any, idx: Index, args: dict[str, Any]) -> tuple[str, str, Name
 
 
 def move_note(s: Any, args: dict[str, Any], ctx: Any = None) -> str:
-    _may_write(ctx)
+    _may_write(ctx, review=False)
     with opened(s) as idx:  # a look first, so a big move can ask without holding the lock
         path, new, _, plan = _plan_move(s, idx, args)
     others = sorted((p for p in plan if p != path), key=str.casefold)
@@ -1240,7 +1357,7 @@ def move_note(s: Any, args: dict[str, Any], ctx: Any = None) -> str:
 
 def trash_note(s: Any, args: dict[str, Any], ctx: Any = None) -> str:
     """Move a note to .trash/ in the vault, the folder Obsidian uses for its own trash."""
-    _may_write(ctx)
+    _may_write(ctx, review=False)
     with _locked(s):
         with opened(s) as idx:
             path = locate(idx, args.get("name"))
@@ -1262,7 +1379,64 @@ def trash_note(s: Any, args: dict[str, Any], ctx: Any = None) -> str:
     return result
 
 
+# ---- the lint pass (curator, /notes check) ----
+
+LINT_SHOWN = 8
+
+
+def lint(s: Any) -> list[str]:
+    """Broken links, notes nothing links to, repeated file names, and files the index
+    skips. Reports only; fixing is the owner's call (or a conversation's). Empty if clean."""
+    with opened(s) as idx:
+        db = idx.db
+        broken = db.execute("SELECT src, kind, raw FROM links WHERE target IS NULL ORDER BY src COLLATE NOCASE, rowid"
+                            ).fetchall()
+        orphans = db.execute("SELECT path FROM notes WHERE path NOT IN (SELECT target FROM links WHERE target IS "
+                             "NOT NULL AND src != target) ORDER BY mtime_ns, path").fetchall()
+        skipped = [r[0] for r in db.execute("SELECT path FROM notes WHERE indexed = 0 ORDER BY path")]
+        total = idx.count()
+        names = idx.names()
+    out = []
+    if broken:
+        srcs = list(dict.fromkeys(src for src, _, _ in broken))
+        shown = "; ".join(f"{src[:-3]} -> {split_target(raw, 'markdown' if kind == 'markdown' else 'wiki')[0] or raw}"
+                          for src, kind, raw in broken[:LINT_SHOWN])
+        out.append(f"{len(broken)} link(s) in {len(srcs)} note(s) point at nothing: {shown}"
+                   + ("; ..." if len(broken) > LINT_SHOWN else "."))
+    if orphans and total > 1:
+        shown = ", ".join(p[:-3] for (p,) in orphans[:LINT_SHOWN])
+        out.append(f"{len(orphans)} of {total} notes have nothing linking to them (oldest first): {shown}"
+                   + (", ..." if len(orphans) > LINT_SHOWN else "."))
+    repeats = {k: md for k, v in names.by_name.items() if not k.endswith(".md")
+               and len(md := [p for p in v if p.lower().endswith(".md")]) > 1}
+    if repeats:
+        shown = "; ".join(", ".join(p[:-3] for p in v) for v in list(repeats.values())[:LINT_SHOWN])
+        out.append(f"{len(repeats)} name(s) used by more than one note, so bare [[links]] to them are ambiguous: "
+                   f"{shown}.")
+    if skipped:
+        out.append(f"{len(skipped)} note(s) too big or not UTF-8, so search can't see inside them: "
+                   + ", ".join(p[:-3] for p in skipped[:LINT_SHOWN]) + ".")
+    return out
+
+
+def lint_report(s: Any, found: list[str] | None = None) -> str:
+    found = lint(s) if found is None else found
+    return "Notes check:" + (" nothing to report." if not found else "\n" + "\n".join(f"- {x}" for x in found))
+
+
 # ---- the owner's view (/notes, chelus notes) ----
+
+def owner_command(s: Any, command: str, arg: str) -> str:
+    """/notes, /notes check and /note NAME, for Telegram and the chat loop."""
+    try:
+        if command == "/notes" and arg.strip().lower() == "check":
+            if not getattr(s, "notes", True):
+                return "Notes are off (notes = false in config.toml)."
+            return lint_report(s)
+        return owner_view(s, arg)
+    except NoteError as e:
+        return str(e)
+
 
 def owner_view(s: Any, name: str = "") -> str:
     """The vault at a glance, or one note, for the owner's own commands (no model)."""
@@ -1292,7 +1466,7 @@ def owner_view(s: Any, name: str = "") -> str:
         lines.append(f"Links to notes that don't exist ({len(missing)}): "
                      + ", ".join(f"{t} ({c})" if c > 1 else t for t, c in top))
     lines.append("Edit the folder in any Markdown editor (Markor, Obsidian). Show one note: /note NAME "
-                 "(in a terminal, chelus notes NAME).")
+                 "(in a terminal, chelus notes NAME). Check for broken links and orphans: /notes check.")
     return "\n".join(lines)
 
 
@@ -1315,6 +1489,8 @@ def shape(s: Any) -> str:
     try:
         with opened(s) as idx:
             paths = [r[0] for r in idx.db.execute("SELECT path FROM notes")]
+    except NoteError:
+        return "Notes folder: can't be read (storage permission); the notes tools say how to fix it."
     except (OSError, sqlite3.Error):
         return "Notes folder: unavailable right now."
     if not paths:

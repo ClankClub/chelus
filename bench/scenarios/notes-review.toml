@@ -1,0 +1,65 @@
+description = "The owner mentions details about a friend in passing, while asking something else. The background review should file them in the friend's existing note, add-only, without touching what's there."
+turns = [
+  "long day. had lunch with Dana Okafor, she's moving to Lisbon in April for a job at the Oceanario, and she's gone vegetarian. anyway, what's a quick dinner I can make tonight with eggs and spinach?",
+]
+max_turns = 1
+review = true
+
+[settings]
+notes_dir = "notes"
+memory_review_interval = 1
+
+[[seed]]
+path = "notes/People/Dana Okafor.md"
+content = """---
+tags:
+  - friends
+---
+# Dana Okafor
+
+Marine biologist. Met at the aquarium volunteer day.
+"""
+
+[[seed]]
+path = "notes/Trips/Lisbon 2027.md"
+content = "Flights booked for April. Ask [[Dana Okafor]] for aquarium tips.\n"
+
+# The turn may file the details itself (DeepSeek does); then the review should add nothing.
+[[check]]
+kind = "review_regex"
+pattern = 'Memory review: '
+label = "the review ran"
+
+[[check]]
+kind = "file_regex"
+path = "notes/People/Dana Okafor.md"
+pattern = '(?is)\A(?!.*oceanario.*oceanario)'
+label = "filed once, not twice"
+
+[[check]]
+kind = "file_regex"
+path = "notes/People/Dana Okafor.md"
+pattern = '(?i)lisbon'
+label = "the move is in her note"
+
+[[check]]
+kind = "file_regex"
+path = "notes/People/Dana Okafor.md"
+pattern = '(?i)vegetarian'
+label = "the diet is in her note"
+
+[[check]]
+kind = "file_regex"
+path = "notes/People/Dana Okafor.md"
+pattern = '^---\ntags:\n  - friends\n---\n# Dana Okafor\n\nMarine biologist\. Met at the aquarium volunteer day\.\n'
+label = "the existing text is untouched"
+
+[[check]]
+kind = "file_missing"
+path = "notes/Dana Okafor.md"
+label = "no duplicate note for Dana"
+
+[[check]]
+kind = "reply_regex"
+pattern = '(?i)egg|spinach|frittata|omelet'
+label = "answered the dinner question"

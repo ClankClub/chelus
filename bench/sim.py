@@ -23,7 +23,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from chelus import approval, jobs, memory, provider
+from chelus import approval, jobs, memory, provider, review
 from chelus.agent import Agent
 from chelus.config import Settings, load_api_key, load_settings
 from chelus.store import Store
@@ -263,6 +263,13 @@ def run_scenario(scenario: dict[str, Any], model: str, home: Path,
                 turn["reply"] = agent.run_turn(text, api_text=api_text) or ""
             except Exception as e:  # a crash is a result, not a reason to stop the batch
                 turn["error"] = f"{type(e).__name__}: {e}"
+            # review = true: the background review runs after the reply when it's due, as the
+            # Telegram bridge runs it. Off by default so other scenarios cost what they did.
+            if scenario.get("review") and not turn["error"] and (agent.review_due or agent.memory_review_due):
+                try:
+                    turn["review"] = review.run(agent).summary()
+                except Exception as e:
+                    turn["review"] = f"review crashed: {type(e).__name__}: {e}"
     except Exception as e:
         run.error = f"{type(e).__name__}: {e}"
     finally:
@@ -297,6 +304,8 @@ def check(c: dict[str, Any], run: Run, s: Settings) -> dict[str, Any]:
     elif kind == "file_missing":
         ok = not (work / c["path"]).exists()
         label = c.get("label") or f"{c['path']} is gone"
+    elif kind == "review_regex":  # what the background review reported doing
+        ok = re.search(c["pattern"], "\n".join(t.get("review", "") for t in run.turns), re.I | re.M) is not None
     elif kind == "max_calls":
         ok = len(run.calls) <= int(c["n"])
         label = c.get("label") or f"at most {c['n']} tool calls"
@@ -343,6 +352,8 @@ def transcript(run: Run, scenario: dict[str, Any], for_judge: bool = False) -> s
             lines.append(f"\n**Error:** {t['error']}\n")
         else:
             lines.append(f"\n**Chelus:** {t['reply']}\n")
+        if t.get("review"):
+            lines.append(f"**Background review:** {t['review']}\n")
     if run.asked:
         lines.append("Approval cards shown: " + "; ".join(run.asked))
     if not for_judge:

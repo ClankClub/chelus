@@ -93,7 +93,8 @@ def cmd_chat(s: Settings, args: argparse.Namespace) -> int:
                 print(memory.owner_view(s))
                 continue
             if line == "/notes" or line.startswith(("/notes ", "/note ")):
-                print(notes.owner_view(s, line.split(" ", 1)[1] if " " in line else ""))
+                cmd, _, rest = line.partition(" ")
+                print(notes.owner_command(s, cmd, rest))
                 continue
             api_text, steps = None, None
             if line == "/learn" or line.startswith("/learn "):
@@ -226,7 +227,7 @@ def cmd_skills(s: Settings, args: argparse.Namespace) -> int:
         elif act == "pending":
             recs = store.pending()
             if not recs:
-                print("no skill changes are waiting")
+                print("no changes are waiting")
             for rec in recs:
                 print(skill_tools.pending_card(rec, s) + "\n")
         elif act == "approve":
@@ -255,7 +256,8 @@ def cmd_skills(s: Settings, args: argparse.Namespace) -> int:
 
 
 def cmd_notes(s: Settings, args: argparse.Namespace) -> int:
-    print(notes.owner_view(s, " ".join(args.name)))
+    print(notes.owner_command(s, "/notes", "check") if args.check
+          else notes.owner_command(s, "/note", " ".join(args.name)))
     return EXIT_OK
 
 
@@ -388,6 +390,8 @@ def build_parser() -> argparse.ArgumentParser:
     me.add_argument("rest", nargs="*")
     no = sub.add_parser("notes", help="the notes folder: recent notes and broken links; or show one note")
     no.add_argument("name", nargs="*", help="a note's name or path, to show that note")
+    no.add_argument("--check", action="store_true",
+                    help="check the folder: broken links, notes nothing links to, repeated names")
     return p
 
 

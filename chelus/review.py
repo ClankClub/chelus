@@ -20,7 +20,10 @@ Different on the phone:
   message when it finishes) and holds the conversation's turn lease meanwhile;
 - with skill_approval = "ask", its changes are staged as pending for the owner, except
   for skills the owner marked "always"; it skips its run while 10 changes already wait;
-- it runs only on the owner's conversations, never a guest's.
+- it runs only on the owner's conversations, never a guest's;
+- with notes on, the memory review may also write notes (docs/NOTES.md): creates and
+  appends apply, while edits and rewrites, and anything the scanner flags, wait for the
+  owner like memory patches; it can't move or trash notes.
 """
 
 from __future__ import annotations
@@ -31,7 +34,7 @@ import sqlite3
 from dataclasses import dataclass, field
 from typing import Any
 
-from . import guardrails, memory, provider, skill_tools, tools
+from . import guardrails, memory, notes, provider, skill_tools, tools
 from .agent import Agent, _dedupe, _tool_row, conversation_prompt
 from .store import SessionBusy
 
@@ -130,6 +133,16 @@ note would keep you refusing long after. Here you may only add: a patch or remov
 Current stores (live; may be newer than your instructions):
 {stores}"""
 
+NOTES_PROMPT = """
+
+Notes: details about other people, places, projects and plans go in the owner's notes folder,
+not in either memory store, even when the owner mentioned them in passing. notes_search first,
+then note_write 'append' to the note on that topic (with 'section' when one fits), or 'create'
+when the topic is new. Write what the owner said, not guesses; link related notes with [[Name]].
+Creates and appends save at once. note_edit and 'replace' wait for the owner, so use them only
+to fix something a note gets wrong. You can't move or trash notes here. Don't repeat what a
+note already says."""
+
 MEMORY_ONLY = """\
 [Memory review] This is not a message from the owner. Review the conversation above for
 facts worth keeping in EVERY future conversation, and save them with the memory tool.
@@ -157,12 +170,14 @@ If neither has anything, reply 'Nothing to save.' and stop. Otherwise act, then 
 with one line per change."""
 
 MEMORY_TOOLS = ("memory",)
+NOTES_TOOLS = ("notes_search", "note_read", "note_write", "note_edit")
 
 
 @dataclass
 class Result:
     saved: list[str] = field(default_factory=list)       # skill writes applied directly ("saved: ...")
     remembered: list[str] = field(default_factory=list)  # memory writes applied directly
+    noted: list[str] = field(default_factory=list)       # note writes applied directly
     staged: list[str] = field(default_factory=list)      # pending change ids (skills and memory)
     reply: str = ""
     skipped: str = ""                                     # why it didn't run, if it didn't
@@ -175,6 +190,8 @@ class Result:
         parts = []
         if self.remembered:
             parts.append("remembered " + "; ".join(self.remembered))
+        if self.noted:
+            parts.append("notes: " + "; ".join(self.noted))
         if self.saved:
             parts.append("saved " + "; ".join(x.removeprefix("saved: ").split("\n")[0] for x in self.saved))
         if self.staged:
@@ -184,12 +201,16 @@ class Result:
 
 def _prompt(kinds: tuple[str, ...], s: Any) -> str:
     stores = memory.owner_view(s).rsplit("\n\nFiles:", 1)[0] if "memory" in kinds else ""
-    mem = MEMORY_PROMPT.format(stores=stores)
+    mem = MEMORY_PROMPT.format(stores=stores) + (NOTES_PROMPT if _notes_on(s) else "")
     if kinds == ("skills",):
         return PROMPT
     if kinds == ("memory",):
         return MEMORY_ONLY.format(memory=mem)
     return COMBINED.format(skills=SKILL_BODY, memory=mem)
+
+
+def _notes_on(s: Any) -> bool:
+    return bool(getattr(s, "notes", False))
 
 
 def run(parent: Agent, kinds: tuple[str, ...] | None = None) -> Result:
@@ -208,6 +229,8 @@ def run(parent: Agent, kinds: tuple[str, ...] | None = None) -> Result:
             return Result(skipped=f"{waiting} earlier changes still wait for your approval (/pending)", kinds=kinds)
         kinds = ("memory",)  # memory adds need no approval, so that part can still run
     allowed = (REVIEW_TOOLS if "skills" in kinds else ()) + (MEMORY_TOOLS if "memory" in kinds else ())
+    if "memory" in kinds and _notes_on(s):
+        allowed += NOTES_TOOLS
     rev = Agent(s, parent.api_key, store, sid, approve=lambda req: False, on_event=parent.on_event,
                 chat_fn=parent.chat_fn, hard_stop=True, actor="review")
     # Same prompt and tools as the conversation, for a warm prefix cache (Hermes).
@@ -264,5 +287,6 @@ def run(parent: Agent, kinds: tuple[str, ...] | None = None) -> Result:
             pass
     result.staged = list(rev.staged)
     result.remembered = list(rev.memory_notes)
+    result.noted = list(rev.note_changes)
     parent.on_event("notice", result.summary())
     return result

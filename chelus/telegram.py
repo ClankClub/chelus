@@ -48,7 +48,7 @@ HELP = (
     "/undo <skill>  undo the last change to a skill\n"
     "/memory  what I remember about you and this phone\n"
     "/memory forget user|memory N  delete entry N\n"
-    "/notes  the notes folder: recent notes, broken links\n"
+    "/notes  the notes folder: recent notes, broken links (/notes check: a full check)\n"
     "/note NAME  show one note\n"
     "/cron  scheduled jobs; /cron pause|resume|run|remove JOB\n"
     "/stop  cancel an automatic retry while DeepSeek is down\n"
@@ -436,7 +436,7 @@ class Bridge:
         elif command == "/pending":
             recs = store.pending()
             if not recs:
-                self._send(chat_id, "No skill changes are waiting.")
+                self._send(chat_id, "No changes are waiting.")
             else:
                 self.send_pending(chat_id, recs)
         elif command == "/undo":
@@ -494,7 +494,7 @@ class Bridge:
             pass
         result = review.run(agent)
         self.log(f"[telegram] {result.summary()}")
-        if result.saved or result.remembered or result.staged or result.skipped:
+        if result.saved or result.remembered or result.noted or result.staged or result.skipped:
             self._send(chat_id, result.summary())
         if result.staged:
             store = self.make_agent.store
@@ -570,7 +570,7 @@ class Bridge:
             if command == "/note" and not arg.strip():
                 self._send(chat_id, "Usage: /note NAME (the note's name or path)")
             else:
-                self._send(chat_id, notes.owner_view(self.s, arg))
+                self._send(chat_id, notes.owner_command(self.s, command, arg))
             return
         if command == "/cron":
             self.cron_command(chat_id, arg)
