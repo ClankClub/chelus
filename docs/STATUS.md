@@ -1,8 +1,22 @@
 # Project status
 
-Updated **2026-10-31**. This is a current-state summary, not a release announcement. Chelus is running on the owner's Samsung Galaxy A10e (Android 11, **32-bit Termux**) and is **pre-1.0**. Its core runs on Python's standard library without pip dependencies; model inference is remote.
+Updated **2026-11-01**. This is a current-state summary, not a release announcement. Chelus 0.9.0 is the 1.0 release candidate, running on the owner's Samsung Galaxy A10e (Android 11, **32-bit Termux**). Its core runs on Python's standard library without pip dependencies; model inference is remote.
 
-**Important source/deployment distinction:** The live phone installation is ahead of the source currently checked into GitHub. Capabilities below marked *owner-confirmed live* describe that configured machine; they should not be read as a promise that a fresh clone includes every integration. Setup remains in [README.md](../README.md), and this page remains the status source of truth.
+The phone runs this repository's code, deployed with `scripts/deploy.sh`. Integrations set up by hand on that phone (email, Vercel, MEGA, ADB) are not part of the repository or of 1.0. Setup is in [README.md](../README.md); this page is the status source of truth.
+
+## 1.0 checklist
+
+1.0 means someone with an Android phone and Termux can install Chelus from the README, talk to it in the terminal and on Telegram, and leave it running: it comes back after a reboot and runs scheduled jobs.
+
+- [x] Scheduling: jobs, delivery to Telegram, script jobs, `/cron` (2026-10-31).
+- [x] Restart after a reboot through Termux:Boot (2026-11-01, about two minutes on the A10e).
+- [x] Docs and product site match the code (2026-11-01).
+- [ ] A clean install from the public repository, in a fresh folder with fresh config, following only the README.
+- [ ] Telegram flows tapped through live by the owner: an approval card's buttons, a `/pending` card (skill, memory or note change), the `edit_file` diff card, the command menu.
+- [ ] A week of unattended running with a daily job, its runs on record. The owner reports the bridge staying up for days, but no run since the reboot fix has been logged end to end.
+- [ ] Tag `v1.0.0` and set `__version__`.
+
+Not in 1.0: voice notes, notes in shared storage (built, unverified), and any other phone or OS.
 
 ## Confirmed on the target phone (base runtime)
 
@@ -30,7 +44,7 @@ These are field results on the owner's installed system, **not yet a clean-insta
 
 Mocked tests establish behavior of the checked-in code, **not** production reliability of each external integration.
 
-## Outstanding for 1.0 and verification limits
+## Verification details by area
 
 - **Scheduling/cron:** the scheduler core is built: schedules, the job and run tables with at-most-once claims and catch-up, the tick in the Telegram bridge, and unattended runs that use only "Always" grants. A one-shot test job ran on time on the phone on 2026-10-28. The model's `cron` tool is built (owner only, asks before every change, strict prompt scan) and was checked live on 2026-10-28: the real model created a weekday job with a correct `[SILENT]` prompt, listed it and deleted it. The queued `run` action is covered by tests only. Delivery and failure handling were finished on 2026-10-31. A live run was delivered with a confirmed Telegram message id and the stop footer, and its next-turn note was stored. The retries for an unreachable model (5/15/30 min) and the three-failure nudge are covered by tests only. Script jobs and the Telegram `/cron` command followed the same day. A no-model battery script job ran live and its output was delivered. `/cron` and the script-plus-model path are covered by tests only. The port list is complete; the later extras are listed there. Port list and status: [docs/hermes/cron.md](hermes/cron.md). Jobs run only while the bridge runs; recurring jobs over days, Doze catch-up and restart after a reboot are not verified.
 - **Tools:** Hermes's tools layer was read on 2026-10-31 against the phone's own tool history, where most shell calls fetch web pages or search text. The port list is in [docs/hermes/tools.md](hermes/tools.md). Items 1 to 5 were built the same day: `web_fetch` and `web_search` (owner only, no approval, public addresses only), and long tool output saved for `read_file` to page.
@@ -44,15 +58,16 @@ Mocked tests establish behavior of the checked-in code, **not** production relia
 - **Notes (phases 1 to 3 built 2026-11-01):** a vault of linked Markdown notes, in the common format Obsidian and other editors read, beside the small memory stores. Six owner-only tools: `notes_search`, `note_read`, `note_write` (create, append, replace), `note_edit`, `note_move` (rewrites links across the vault) and `note_trash` (to `.trash/`, nothing erased); `/notes`, `/note NAME`, `/notes check` and `chelus notes` for the owner. The memory review also files details in notes: creates and appends apply, edits and rewrites wait on a card pinned to the note's revision. The weekly curator reports broken links, notes nothing links to and repeated names when they change. Built from public documentation only. On the bench (`notes-recall`, `notes-vault`, `notes-move`, `notes-review`) DeepSeek Flash passes; GPT-OSS 20B mostly does, its misses being skipped tools, claimed edits and, as a reviewer, about one run in five doing nothing. On the phone a 2,000-note vault indexes in 19 s and searches in about 210 ms, and a live rename and trash worked. Not verified: `notes_dir` on shared storage, because Termux's read permission for shared storage was revoked on the A10e (details in [docs/NOTES.md](NOTES.md)).
 - **Unattended resilience:** restart after a reboot works: on 2026-11-01 an `adb reboot` of the A10e brought the bridge back through Termux:Boot (`scripts/termux-boot-chelus.sh`) 2 min 13 s after the reboot command, and sshd with it; wireless debugging did not come back (Android turns it off at boot). Not verified: that it answers a Telegram message after the reboot without anyone opening Termux, process survival and Doze over days, and missed-wake recovery.
 - **Specific Telegram flows:** end-to-end approval-button interactions, newer skills flows, and memory-review/pending cards remain not independently verified in the live bridge.
-- **Release parity:** the on-phone code (tool approvals, Telegram photos, skill size limits) is back in this repository as of 2026-10-28. Integration setup (AgentMail, Vercel, MEGA, ADB) still lives only on the phone and is not documented here.
+- **Release parity:** the on-phone code (tool approvals, Telegram photos, skill size limits) is back in this repository as of 2026-10-28, and the phone has run deployed repository code since. Integration setup (AgentMail, Vercel, MEGA, ADB) lives only on the phone and is out of scope for 1.0.
+- **Product site (2026-11-01):** `website/` builds the guides at clankclub.github.io/chelus with standard-library Python; GitHub Pages deploys it from `main`. Checked in a browser at desktop and phone widths: navigation, the mobile menu, copy buttons, no console errors, no sideways scroll. The phone photos are AI-generated and captioned as illustrative; real photos of the A10e would be better.
 - **Portability:** the Galaxy A10e/32-bit Termux is the demonstrated platform. Additional hardware/OS support should be claimed only after testing.
 
 Run the source test suite with `python -m unittest discover -s tests -t .`. Report separately what passed in desktop mocks, tests executed on the phone, and actual live network/device use. Avoid converting either self-reported field results or mocked tests into stronger guarantees than they support.
 
 ## Audit fixes (merged 2026-10-28)
 
-Seven 2026-10-24 audit findings are fixed: Telegram batch tails, session ownership during slow retries, executable launcher and canonical install URL, bounded shell output, staged deployment with true test status, provider response validation, and guest listing metadata filtering. Covered by mocked tests; not yet run on the phone.
+Seven 2026-10-24 audit findings are fixed: Telegram batch tails, session ownership during slow retries, executable launcher and canonical install URL, bounded shell output, staged deployment with true test status, provider response validation, and guest listing metadata filtering. Covered by mocked tests, which run on the phone with every deploy.
 
 ## Consolidation and rename (2026-10-28)
 
-`main` now joins three lines that had diverged: the GitHub docs, the audit fixes, and the code the phone was running, which had never been committed (Hermes's tool-approvals work plus edits made on the phone). The package, scripts and folders are renamed Chelys to Chelus; existing installs migrate their config and data folders on first start (see the README). Tests pass on the phone in a scratch copy; the migration has not yet run on the live install.
+`main` now joins three lines that had diverged: the GitHub docs, the audit fixes, and the code the phone was running, which had never been committed (Hermes's tool-approvals work plus edits made on the phone). The package, scripts and folders are renamed Chelys to Chelus; existing installs migrate their config and data folders on first start (see the README). The migration has run on the live install: its folders are `chelus`, with `chelys` symlinks left at the old paths.

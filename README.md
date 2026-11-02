@@ -6,20 +6,20 @@
 
 > Chelus is a small, persistent AI agent built to do more with less. It runs on a Samsung Galaxy A10e using 32-bit Android/Termux, in an environment too constrained for many modern agent stacks.
 
-The core agent loop, tools, conversation history, memory, skills, and Telegram bridge run **on the phone**, using Python's **standard library only** (no pip dependencies). Model inference happens remotely through DeepSeek; optional services and command-line tools can extend the agent without becoming core dependencies. The goal is a capable, inspectable agent for constrained computers—not a model running inference locally, and not a 32-bit-only Python codebase.
+The core agent loop, tools, conversation history, memory, notes, skills, scheduled jobs and Telegram bridge run **on the phone**, using Python's **standard library only** (no pip dependencies). Model inference happens remotely, through DeepSeek or any OpenAI-compatible API; optional services and command-line tools can extend the agent without becoming core dependencies. The goal is a capable, inspectable agent for constrained computers—not a model running inference locally, and not a 32-bit-only Python codebase.
 
 The project adapts ideas from [Hermes Agent](https://github.com/NousResearch/hermes-agent) for hardware that cannot install its usual dependencies. Chelus is independent of Nous Research. See [NOTICE](NOTICE) for attribution.
 
-**Status (2026-10-26):** operational, **pre-1.0**, on a Samsung Galaxy A10e (Android 11, 32-bit Termux). The owner has confirmed live operation beyond terminal/Telegram chat: email, deployments through an on-phone Vercel CLI, hosted job storage, wireless ADB operations, and external research/storage tools. **The live setup is ahead of the checked-in source**; those optional integrations are not all supplied by a fresh clone. Base scheduling/cron integration and unattended/reboot reliability still need work. See [current verification and remaining gaps](docs/STATUS.md).
+**Status:** 0.9.0, the 1.0 release candidate. It runs daily on a Samsung Galaxy A10e (Android 11, 32-bit Termux) and comes back on its own after a reboot. What 1.0 still needs, and what has and hasn't been verified on the phone, is in [docs/STATUS.md](docs/STATUS.md). Changes: [CHANGELOG.md](CHANGELOG.md).
 
-**Project name vs. command name:** the repository is now **Chelus**, but the Python package, `chelus` command, script names, and local config/data paths have not yet been renamed. Commands below use the identifiers that work with the current code.
+**Guides:** the product site at [clankclub.github.io/chelus](https://clankclub.github.io/chelus/) walks through setup, Telegram, notes, tools and scheduling.
 
 [Requirements](#requirements) · [Install](#install) · [Terminal](#terminal-usage) · [Telegram](#telegram) · [Development](#development)
 
 ## Requirements
 
 - [Termux](https://termux.dev/) with Python 3.11 or newer (tested with 3.14.8 on armv8l).
-- A DeepSeek API key for model inference.
+- An API key for model inference: DeepSeek by default, or any OpenAI-compatible API (see [Configuration](#configuration)).
 - Optional for the `battery_status` tool: the Termux `termux-api` package and the Termux:API app.
 
 **Node.js is not required to run Chelus.** It is installed separately on the owner's phone to support optional tooling, including the Vercel CLI. Likewise, cloud accounts, ADB, and other external CLIs/APIs are enhancements, not runtime dependencies. Other Linux/Python environments are a portability goal, not yet a tested support matrix.
@@ -168,15 +168,7 @@ Conversation history, memories, and skills are stored locally under `~/.local/sh
 
 ## Beyond the base installation
 
-The owner's **live Galaxy A10e installation** has demonstrated capabilities beyond the currently documented base checkout:
-
-- **Email:** sends, reads, and replies using an AgentMail HTTPS API without a local mail client; a message from Chelus reached an external recipient on 2026-10-26.
-- **Deployment:** runs the Vercel CLI **on the phone** (with separately installed Node.js), creating preview and production deployments. Vercel's remote infrastructure performs the application build, not the phone. One deployed example is the owner-restricted [Chelus Brainstem](https://chelus-brainstem.vercel.app/) job queue.
-- **Durable hosted jobs:** that deployment uses Upstash Redis for state that survives the phone sleeping or going offline. Redis and the application run off-device; the agent runtime remains on the phone.
-- **Device operations:** uses wireless ADB for device and package inspection, including removing and restoring packages in the owner's setup.
-- **External resources:** uses web search/scraping and MEGA cloud storage, in addition to its local procedural skills.
-
-These are **owner-confirmed results from one configured installation**, not claims that every item ships with the Python core or has been reproduced by a clean install from GitHub. Some live changes and integration setup have not yet been reflected in the repository source. Optional tools can depend on additional packages, native binaries, credentials, and external services even though **Chelus itself remains standard-library Python**. The operational evidence and verification boundaries are tracked in [docs/STATUS.md](docs/STATUS.md).
+With shell access, Chelus can drive other command-line tools and HTTPS APIs. On the owner's phone it has sent email through an API, deployed sites with the Vercel CLI, and worked over wireless ADB. None of those ship with Chelus or are part of 1.0; each needs its own packages, accounts and credentials. [docs/STATUS.md](docs/STATUS.md) lists what was seen working.
 
 ## Configuration
 
@@ -220,6 +212,8 @@ python -m unittest discover -s tests -t .
 ```
 
 Tests use a fake model and local HTTP server; they do not call DeepSeek.
+
+The product site and guides live under [website/](website/README.md): static pages built by standard-library Python and published to GitHub Pages by `.github/workflows/pages.yml` on every push to `main` that touches them. They add nothing to the agent. Run `python -m unittest discover -s website/tests` after editing them.
 
 `sh scripts/deploy.sh` stages a candidate in a temporary folder on the phone (host alias `galaxy-a10e`, or set `CHELUS_HOST`), runs the suite there and reports the real test status. A failing candidate leaves the install untouched; a passing one is copied into place. Stop the bridge before deploying and restart it afterward.
 
