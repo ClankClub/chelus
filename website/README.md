@@ -37,7 +37,7 @@ The preview redirects `/` to `/chelus/` and rebuilds when authored content, temp
 
 `.github/workflows/pages.yml` checks pull requests and builds/deploys changes on `main`. Actions are pinned to verified release commit SHAs. Select **Settings → Pages → Build and deployment → Source: GitHub Actions**. Enabling Pages alone may leave a branch-source configuration; the workflow expects Actions mode.
 
-The production URL is `https://clankclub.github.io/chelus/`. The configure step supplies the base path. For a future custom domain, update `ORIGIN` in `build.py` and the absolute social-image URL in `templates/base.html` as well as Pages settings.
+The production URL is `https://chelus.clankclub.site/`. The configure step supplies the base path; the workflow falls back to `/` for the custom domain. Update `ORIGIN` in `build.py` and the absolute social-image URL in `templates/base.html` if the domain changes.
 
 Pull-request runs build and test only; they do not publish. Only `main` can deploy, with Pages write and OIDC permissions restricted to the deployment job. Never publish a new branch or change a Pages setting without the user's public-repository approval.
 

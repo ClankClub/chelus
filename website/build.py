@@ -13,7 +13,7 @@ from content import PAGES, code
 
 ROOT = Path(__file__).resolve().parent
 REPO = 'https://github.com/ClankClub/chelus'
-ORIGIN = 'https://clankclub.github.io'
+ORIGIN = 'https://chelus.clankclub.site'
 
 
 def normalize_base(value: str) -> str:
