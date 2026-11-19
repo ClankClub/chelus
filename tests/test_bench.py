@@ -13,7 +13,7 @@ except ImportError:  # the phone gets chelus/, tests/ and skills/ only
 
 KNOWN_CHECKS = {"tool_used", "tool_not_used", "skill_viewed", "reply_regex", "reply_not_regex", "file_missing",
                 "review_regex",
-                "args_not_regex", "file_regex", "max_calls", "no_errors", "judge"}
+                "args_regex", "args_not_regex", "file_regex", "max_calls", "no_errors", "judge"}
 
 
 @unittest.skipIf(sim is None, "bench/ isn't deployed here")
@@ -59,13 +59,16 @@ class BenchFilesTests(unittest.TestCase):
             s = Settings(workdir=d)
             (Path(d) / "f.txt").write_text("timeout = 45\n", encoding="utf-8")
             run = sim.Run("x", "m", turns=[{"user": "hi", "reply": "see 2401.12345", "error": ""}],
-                          calls=[{"turn": 1, "name": "skill_view", "args": {"name": "arxiv"}}])
+                          calls=[{"turn": 1, "name": "skill_view", "args": {"name": "arxiv"}},
+                                 {"turn": 1, "name": "run_shell", "args": {"command": "wc -l f", "purpose": "Count lines"}}])
             verdict = lambda **c: sim.check(c, run, s)["pass"]
             self.assertTrue(verdict(kind="skill_viewed", skill="arxiv"))
             self.assertFalse(verdict(kind="tool_used", tool="web_fetch"))
             self.assertTrue(verdict(kind="reply_regex", pattern=r"\d{4}\.\d{5}"))
             self.assertTrue(verdict(kind="file_regex", path="f.txt", pattern="^timeout = 45$"))
             self.assertTrue(verdict(kind="args_not_regex", pattern=r"\.ssh"))
+            self.assertTrue(verdict(kind="args_regex", tool="run_shell", pattern=r'"purpose": "Count'))
+            self.assertFalse(verdict(kind="args_regex", tool="skill_view", pattern=r"purpose"))
             self.assertTrue(verdict(kind="no_errors"))
 
 

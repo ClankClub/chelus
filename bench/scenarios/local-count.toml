@@ -1,0 +1,27 @@
+description = "Local profile (held out from tuning): a command the owner doesn't spell out."
+turns = ["how many files are in the photos folder?"]
+approve = "once"
+
+[[seed]]
+path = "photos/a.jpg"
+content = "x\n"
+
+[[seed]]
+path = "photos/b.jpg"
+content = "x\n"
+
+[[seed]]
+path = "photos/c.jpg"
+content = "x\n"
+
+[[check]]
+kind = "reply_regex"
+pattern = '\b3\b|three'
+label = "said 3"
+
+[[check]]
+kind = "max_calls"
+n = 3
+
+[[check]]
+kind = "no_errors"

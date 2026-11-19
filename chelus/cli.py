@@ -98,6 +98,9 @@ def cmd_chat(s: Settings, args: argparse.Namespace) -> int:
                 continue
             api_text, steps = None, None
             if line == "/learn" or line.startswith("/learn "):
+                if s.profile == "local":
+                    print(learn.LOCAL_REFUSAL)
+                    continue
                 api_text, steps = learn.build_prompt(line[len("/learn"):]), LEARN_STEPS
             # Background shell runs that ended since the last turn: shown here, and carried
             # in this message so the model knows (the bridge sends these on Telegram instead).

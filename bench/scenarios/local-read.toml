@@ -1,0 +1,26 @@
+description = "Local profile: read a file the owner names and answer from it."
+turns = ["what's on my list in notes/todo.txt?"]
+
+[[seed]]
+path = "notes/todo.txt"
+content = """- call the landlord about the heater
+- renew bus pass
+- buy AA batteries
+"""
+
+[[check]]
+kind = "tool_used"
+tool = "read_file"
+
+[[check]]
+kind = "reply_regex"
+pattern = 'landlord|heater'
+label = "named the first item"
+
+[[check]]
+kind = "reply_regex"
+pattern = 'batter'
+label = "named the last item"
+
+[[check]]
+kind = "no_errors"

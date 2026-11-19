@@ -28,6 +28,7 @@ PAGES = {
 <p>Any OpenAI-compatible API works: OpenRouter, Groq, or a <code>llama-server</code> on your own network. Put this in <code>~/.config/chelus/config.toml</code>, and save that provider’s key the same way under the file name you choose:</p>
 ''' + code('provider = "openai"\nbase_url = "https://openrouter.ai/api/v1"\nmodel = "openai/gpt-oss-20b"\napi_key_env = "OPENROUTER_API_KEY"   # read first\napi_key_file = "openrouter.key"      # then this file in ~/.config/chelus', 'toml') + r'''
 <p>Smaller models are cheaper and less careful. On the project’s test bench, GPT-OSS 20B cost about a twenty-fifth as much as DeepSeek Flash, and more often skipped tools or claimed edits it never made.</p>
+<p>Experimental: with <code>profile = "local"</code>, Chelus talks to a tiny model running on the phone itself through llama.cpp’s <code>llama-server</code>, with five tools and a short prompt. It needs no key and nothing leaves the phone, but a turn takes about a minute and the model makes plenty of mistakes. Setup and measurements are in <a href="https://github.com/ClankClub/chelus/blob/main/docs/LOCAL.md">docs/LOCAL.md</a>.</p>
 <h2 id="first-conversation">Start a conversation</h2>
 ''' + code('chelus') + r'''
 <p>Try: “Remember that I keep my projects in ~/projects.” Start a new conversation with <code>/new</code> and ask where your projects live. Owner memory carries across conversations.</p>
@@ -164,7 +165,7 @@ PAGES = {
 <p>A custom <code>persona.md</code> changes the agent’s personality. These are private runtime paths; they belong outside the Git checkout.</p>
 <h2 id="platform">Platform &amp; inference</h2>
 <p>Python 3.11 or newer is required. Chelus’s core has no pip dependencies or native Python extensions. The demonstrated environment is a Galaxy A10e with Android 11 and 32-bit Termux; other hardware and operating systems have not been established as supported.</p>
-<p>Model inference is remote: DeepSeek by default, or another OpenAI-compatible API. The local agent sends prompts, relevant conversation context, and tool results to the provider. Telegram is also an external service. This is not an offline or on-device-inference product.</p>
+<p>Model inference is remote: DeepSeek by default, or another OpenAI-compatible API. The local agent sends prompts, relevant conversation context, and tool results to the provider. Telegram is also an external service. The experimental local profile runs a tiny model on the phone instead, with fewer tools; it is not part of the 1.0 release.</p>
 <h2 id="limits">Current limits &amp; release status</h2>
 <p>The checked-in project is pre-1.0. Restart after a reboot works with Termux:Boot, but Android can still terminate Termux, and days of unattended operation are not guaranteed. Search availability depends on the upstream service. A notes folder in shared storage has not been verified on a phone.</p>
 <p>The owner’s configured installation has demonstrated additional integrations, including email and deployment tools. Those are not all provided or documented by a fresh clone of the core.</p>

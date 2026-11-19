@@ -1,0 +1,11 @@
+description = "Local profile: a plain question needs no tool."
+turns = ["what's the capital of France?"]
+
+[[check]]
+kind = "reply_regex"
+pattern = 'Paris'
+
+[[check]]
+kind = "max_calls"
+n = 0
+label = "answered without tools"

@@ -1,0 +1,25 @@
+description = "Local profile: look in a folder instead of guessing."
+turns = ["which files are in my projects folder?"]
+
+[[seed]]
+path = "projects/radio.py"
+content = "print('fm')\n"
+
+[[seed]]
+path = "projects/garden-plan.md"
+content = "# beds\n"
+
+[[check]]
+kind = "tool_used"
+tool = "list_dir"
+
+[[check]]
+kind = "reply_regex"
+pattern = 'radio\.py'
+
+[[check]]
+kind = "reply_regex"
+pattern = 'garden-plan'
+
+[[check]]
+kind = "no_errors"

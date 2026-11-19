@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- **Local profile (experimental):** `profile = "local"` runs Chelus against a small model on the phone through `llama-server`: five tools with short schemas, a short prompt (`persona-local.md`), llama-server's thinking switch and a temperature, no key, and no skills, memory, notes, web, scheduling or background reviews. `/learn` says it needs the full profile. See [docs/LOCAL.md](docs/LOCAL.md).
+- **Bench:** `local-*` scenarios (three held out from tuning), the `local-phone` profile and an `args_regex` check.
+
 ## 0.9.0 (2026-11-01): 1.0 release candidate
 
 What 1.0 still needs is in [docs/STATUS.md](docs/STATUS.md#10-checklist).

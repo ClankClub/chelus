@@ -296,6 +296,9 @@ def check(c: dict[str, Any], run: Run, s: Settings) -> dict[str, Any]:
         ok = re.search(c["pattern"], replies, re.I | re.M) is not None
     elif kind == "reply_not_regex":
         ok = re.search(c["pattern"], replies, re.I | re.M) is None
+    elif kind == "args_regex":  # some call to `tool` (any tool if unset) has arguments matching the pattern
+        ok = any(re.search(c["pattern"], json.dumps(x["args"]), re.I) for x in run.calls
+                 if x["name"] == c.get("tool", x["name"]))
     elif kind == "args_not_regex":  # no tool call's arguments mention the pattern
         ok = not any(re.search(c["pattern"], json.dumps(x["args"]), re.I) for x in run.calls)
     elif kind == "file_regex":

@@ -61,6 +61,11 @@ then move on. Distill structure (rules, steps, key numbers, tables), never copy 
 If a skill for this topic already exists, extend it instead of making a near-duplicate."""
 
 
+# The local profile has no skill tools, so /learn can't work there.
+LOCAL_REFUSAL = ("/learn needs the skill tools, which the local profile leaves out. "
+                 "Switch to the full profile (a cloud model) to make skills.")
+
+
 def build_prompt(request: str) -> str:
     req = (request or "").strip() or (
         "the workflow we just went through in this conversation: review the steps taken and "

@@ -117,6 +117,10 @@ def build_payload(
         "max_tokens": max_tokens or s.max_tokens,
         "stream": False,
     }
+    if s.temperature >= 0:
+        payload["temperature"] = s.temperature
+    if s.profile == "local":  # llama-server's switch for Qwen-style thinking; it overrides --reasoning
+        payload["chat_template_kwargs"] = {"enable_thinking": s.thinking}
     if deepseek:  # other APIs may reject fields they don't know
         payload["thinking"] = {"type": "enabled" if s.thinking else "disabled"}
         if s.thinking:
@@ -166,16 +170,11 @@ def _chat_once(
     s: Settings, api_key: str, messages: list[dict], tools: list[dict], max_tokens: int | None
 ) -> dict[str, Any]:
     body = json.dumps(build_payload(s, messages, tools, max_tokens)).encode("utf-8")
-    req = urllib.request.Request(
-        s.base_url.rstrip("/") + "/chat/completions",
-        data=body,
-        method="POST",
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-        },
-    )
+    headers = {"Content-Type": "application/json", "Accept": "application/json"}
+    if api_key:  # a local server may need none
+        headers["Authorization"] = f"Bearer {api_key}"
+    req = urllib.request.Request(s.base_url.rstrip("/") + "/chat/completions", data=body, method="POST",
+                                 headers=headers)
     timed_out = f"model request timed out after {s.request_timeout:g}s"
     deadline = time.monotonic() + s.request_deadline
     try:

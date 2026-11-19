@@ -590,6 +590,9 @@ class Bridge:
 
         api_text, step_limit = None, None
         if command == "/learn":
+            if self.s.profile == "local":
+                self._send(chat_id, learn.LOCAL_REFUSAL)
+                return
             api_text, step_limit = learn.build_prompt(arg), LEARN_STEPS
         if is_owner and self.cron is not None:
             # What scheduled jobs sent since the owner last wrote rides in this message, so a

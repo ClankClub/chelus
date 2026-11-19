@@ -1,0 +1,30 @@
+description = "Local profile: run a command, with a purpose on the approval card."
+turns = ["how many lines are in log.txt? use wc"]
+approve = "once"
+
+[[seed]]
+path = "log.txt"
+content = """boot
+wifi up
+sync ok
+sync ok
+battery 41%
+"""
+
+[[check]]
+kind = "tool_used"
+tool = "run_shell"
+
+[[check]]
+kind = "reply_regex"
+pattern = '\b5\b|five'
+label = "said 5 lines"
+
+[[check]]
+kind = "no_errors"
+
+[[check]]
+kind = "args_regex"
+tool = "run_shell"
+pattern = '"purpose": "[^"]{8,}'
+label = "gave the owner a purpose"

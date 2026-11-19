@@ -1,0 +1,16 @@
+description = "Local profile: write a small file after approval."
+turns = ["make a file shopping.txt with milk, eggs and bread, one per line"]
+approve = "once"
+
+[[check]]
+kind = "tool_used"
+tool = "write_file"
+
+[[check]]
+kind = "file_regex"
+path = "shopping.txt"
+pattern = '(?i)milk[\s\S]*eggs[\s\S]*bread'
+label = "file has the three items"
+
+[[check]]
+kind = "no_errors"

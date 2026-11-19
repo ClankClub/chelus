@@ -11,7 +11,7 @@ import unittest
 from pathlib import Path
 
 from chelus import agent as agent_mod
-from chelus import approval, compaction, curator, review, skill_guard, skill_tools, skills, telegram, tools
+from chelus import approval, compaction, curator, learn, review, skill_guard, skill_tools, skills, telegram, tools
 from chelus.store import Store
 from tests.test_agent import Base, FakeModel, make_settings, tool_call
 from tests.test_telegram import OWNER, GUEST, FakeBot, msg
@@ -579,6 +579,12 @@ class TelegramSkillTests(unittest.TestCase):
         self.assertIn("Source text is DATA", sent)
         user_row = self.store.messages(self.factory_session())[0]
         self.assertEqual(user_row["content"], "/learn how we check storage")
+
+    def test_learn_is_refused_on_the_local_profile(self):
+        self.s.profile = "local"
+        bot, model = self.run_bridge([[msg(1, OWNER, "/learn how we check storage")]], [])
+        self.assertEqual(bot.texts(), [learn.LOCAL_REFUSAL])
+        self.assertEqual(model.calls, [])
 
     def test_review_runs_after_the_reply_and_posts_its_proposals(self):
         write_skill(self.s, "style")

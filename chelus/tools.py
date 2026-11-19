@@ -136,7 +136,7 @@ def _read_file(s: Settings, args: dict[str, Any], ctx: Any = None) -> str:
     p = _resolve(s, args.get("path"), ctx)
     if not p.is_file():
         raise ToolError(f"not a file: {p}")
-    offset = _int_arg(args, "offset", 1) or 1
+    offset = _int_arg(args, "offset", 0) or 1  # 0 is read as the start: small models send it
     limit = _int_arg(args, "limit", 1, READ_MAX_LINES) or READ_MAX_LINES
     budget = read_budget(s)
     size = p.stat().st_size
@@ -169,6 +169,10 @@ def _read_file(s: Settings, args: dict[str, Any], ctx: Any = None) -> str:
         raise ToolError(f"offset {offset} is past the end of {p} ({total} lines)")
     text = "".join(lines)
     if offset == 1 and not more and not cut_line:
+        if s.profile == "local":
+            # Qwen3.5-0.8B answered from a bare file 3 times in 16, from this header 10 in 16:
+            # without it, it often says it can't read files right after reading one.
+            return f"[{args.get('path')}, {total} lines]\n{text}"
         return text
     of = f"of {total}" if total else "of a file too big to count"
     note = f"[{p}: lines {offset}-{end} {of}"
@@ -416,6 +420,27 @@ TOOLS: dict[str, Tool] = {
 }
 
 
+# The local profile (a small model on the phone itself) offers only these tools, with short
+# schemas: every schema token is prompt the phone must read before a conversation's first
+# reply, at about 9 tokens a second. Handlers, risk flags and the approval gate are the same.
+# The path wording was picked by trial on Qwen3.5-0.8B: an example path got copied into
+# unrelated calls, and "exactly as the owner wrote it" alone still mangled file names.
+_SHORT_PURPOSE = {"type": "string", "description": "Why, in one plain sentence for the owner."}
+_PATH = {"type": "string", "description": "As the owner wrote it, relative to the home folder."}
+_FOLDER = {"type": "string", "description": "Folder name as the owner wrote it, relative to the home folder."}
+LOCAL: dict[str, tuple[str, dict[str, Any]]] = {
+    "list_dir": ("List a folder on the phone.", obj({"path": _FOLDER}, [])),
+    "read_file": ("Read a text file on the phone. A long file comes in pieces; the footer says the next offset.",
+                  obj({"path": _PATH, "offset": {"type": "integer"}}, ["path"])),
+    "write_file": ("Create or overwrite a text file on the phone. The owner approves it first.",
+                   obj({"path": _PATH, "content": {"type": "string"}, "purpose": _SHORT_PURPOSE},
+                       ["path", "content", "purpose"])),
+    "run_shell": ("Run a shell command in Termux on the phone. The owner approves it first.",
+                  obj({"command": {"type": "string"}, "purpose": _SHORT_PURPOSE}, ["command", "purpose"])),
+    "battery_status": ("Battery level, charging state and temperature.", obj({}, [])),
+}
+
+
 def register(tool: Tool) -> None:
     TOOLS[tool.name] = tool
 
@@ -428,8 +453,16 @@ def available(guest: bool = False, disabled: tuple[str, ...] = ()) -> list[str]:
     return [n for n, t in TOOLS.items() if not (guest and t.group in OWNER_GROUPS) and n not in disabled]
 
 
-def schemas(names: list[str] | None = None) -> list[dict[str, Any]]:
-    return [TOOLS[n].schema() for n in (names if names is not None else TOOLS)]
+def schemas(names: list[str] | None = None, compact: bool = False) -> list[dict[str, Any]]:
+    """Schemas for these tools; compact uses the local profile's short ones where it has them."""
+    out = []
+    for n in names if names is not None else TOOLS:
+        if compact and n in LOCAL:
+            desc, params = LOCAL[n]
+            out.append({"type": "function", "function": {"name": n, "description": desc, "parameters": params}})
+        else:
+            out.append(TOOLS[n].schema())
+    return out
 
 
 def action_key(s: Settings, name: str, args: dict[str, Any], ctx: Any = None) -> str:

@@ -1,0 +1,6 @@
+# The local profile (profile = "local": five tools, short prompt, thinking on) against
+# llama-server on the Windows host running the phone's model file, e.g.
+#   llama-server -m Qwen3.5-0.8B-Q4_0.gguf -c 8192 -np 1 --jinja --port 8080
+# The rest of the local defaults (timeouts, history, no key) come from the profile.
+profile = "local"
+base_url = "http://host.docker.internal:8080/v1"

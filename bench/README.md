@@ -26,7 +26,9 @@ docker compose -f bench/compose.yaml run --rm chelus sim --models gpt-oss-20b,de
 
 **Test bot.** Make a second bot with BotFather and put its token in `secrets/telegram.token` and your numeric Telegram ID in `secrets/telegram_user_id` (the folder is git-ignored). Then `CHELUS_PROFILE=... docker compose -f bench/compose.yaml up -d bot`; switch models by restarting it with another profile. Only one process may poll a bot token, so don't point the bench at the phone's bot.
 
-**Local models.** `models/local.toml` points at `llama-server` on the Windows host (`--jinja` is needed for tool calls). Put any text in the key it names, e.g. `LOCAL_API_KEY=x`.
+**Local models.** `models/local.toml` points at `llama-server` on the Windows host (`--jinja` is needed for tool calls) with the full profile. Put any text in the key it names, e.g. `LOCAL_API_KEY=x`. `models/local-phone.toml` uses the [local profile](../docs/LOCAL.md) instead (five tools, short prompt, no key) against the same host on port 8080; serve the phone's model file there to see the phone's answers, if not its speed. The `local-*` scenarios are written for it; `local-config`, `local-folder` and `local-count` were kept out of the prompt tuning, so score them separately.
+
+Run the simulator in the container, not on Windows: its shell runs need `selectors` on pipes, which Windows doesn't support.
 
 ## Simulations
 
@@ -41,7 +43,7 @@ A scenario is TOML:
 - `turns`: scripted messages. `/new` starts a new conversation; `/wait N` sleeps N seconds (for background jobs).
 - `[owner]` with `persona` and `goal`: after the script runs out, a model plays the owner until it says `[DONE]` or `max_turns` is reached.
 - `role = "guest"`, `approve = "once"|"session"|"always"|"deny"` (approval cards are answered this way), `[settings]` overrides, `[[seed]]` files in the workdir, `[memory]` entries, `starter_skills = false`, `review = true` (run the background review after a reply when it's due, as the Telegram bridge does; set `memory_review_interval` in `[settings]` to make it due sooner).
-- `[[check]]`: `tool_used`, `tool_not_used`, `skill_viewed`, `reply_regex`, `reply_not_regex`, `args_not_regex`, `file_regex`, `file_missing`, `review_regex` (what the background review reported), `max_calls`, `no_errors`, and `judge` (a criterion a model grades from the transcript).
+- `[[check]]`: `tool_used`, `tool_not_used`, `skill_viewed`, `reply_regex`, `reply_not_regex`, `args_regex` (some call's arguments match, optionally only calls to `tool`), `args_not_regex`, `file_regex`, `file_missing`, `review_regex` (what the background review reported), `max_calls`, `no_errors`, and `judge` (a criterion a model grades from the transcript).
 
 Costs: OpenRouter reports each call's charge; with bring-your-own-key routing the real charge is `cost_details.upstream_inference_cost`, which the simulator uses. DeepSeek reports none, so its cost is estimated from `prices.toml` at peak rates (marked `~`; off-peak is half). The simulated owner and the judge are totalled separately. `--max-cost` (default $0.25) stops starting new runs once the whole invocation has spent that much. One full suite (eight scenarios) cost about $0.0015 on GPT-OSS 20B and $0.04 on DeepSeek Flash on 2026-11-01.
 

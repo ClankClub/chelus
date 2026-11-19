@@ -1,0 +1,21 @@
+description = "Local profile (held out from tuning): find a value in a config file."
+turns = ["what port is set in config/app.ini?"]
+
+[[seed]]
+path = "config/app.ini"
+content = """[server]
+host = 0.0.0.0
+port = 8457
+workers = 2
+"""
+
+[[check]]
+kind = "tool_used"
+tool = "read_file"
+
+[[check]]
+kind = "reply_regex"
+pattern = '8457'
+
+[[check]]
+kind = "no_errors"

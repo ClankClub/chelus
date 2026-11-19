@@ -1,0 +1,25 @@
+description = "Local profile (held out from tuning): what's in a folder, asked another way."
+turns = ["anything in downloads?"]
+
+[[seed]]
+path = "downloads/bus-schedule.pdf"
+content = "not really a pdf\n"
+
+[[seed]]
+path = "downloads/receipt-0412.txt"
+content = "total 12.40\n"
+
+[[check]]
+kind = "tool_used"
+tool = "list_dir"
+
+[[check]]
+kind = "reply_regex"
+pattern = 'bus-schedule'
+
+[[check]]
+kind = "reply_regex"
+pattern = 'receipt'
+
+[[check]]
+kind = "no_errors"

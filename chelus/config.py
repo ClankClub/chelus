@@ -48,6 +48,11 @@ def _cache_dir() -> Path:
 
 @dataclass
 class Settings:
+    # "full": every tool and the whole prompt, for capable (cloud) models. "local": a small
+    # model on the phone itself through llama-server: five core tools with short schemas, a
+    # short prompt, no skills, memory, notes, web or cron tools, and no background reviews.
+    # Settings that local mode needs to differ get LOCAL_DEFAULTS unless config.toml sets them.
+    profile: str = "full"
     # Provider. "deepseek" sends DeepSeek's thinking switch and replays reasoning_content;
     # "openai" is any other OpenAI-compatible chat-completions API (OpenRouter, Groq,
     # llama-server) and sends only the standard fields.
@@ -57,8 +62,11 @@ class Settings:
     # Where the key comes from: this environment variable, else this file in config_dir.
     api_key_env: str = "DEEPSEEK_API_KEY"
     api_key_file: str = "deepseek.key"
+    # DeepSeek's thinking switch; on the local profile, llama-server's (Qwen's enable_thinking).
     thinking: bool = False
     reasoning_effort: str = "high"  # DeepSeek's default; used only when thinking is enabled
+    # Sampling temperature sent with each request; below 0 sends none (the provider's default).
+    temperature: float = -1.0
     max_tokens: int = 2048
     request_timeout: float = 60.0      # longest wait for any single socket read
     request_deadline: float = 300.0    # longest a whole model request may take
@@ -126,6 +134,10 @@ class Settings:
         return self.config_dir / "persona.md"
 
     @property
+    def persona_local_path(self) -> Path:
+        return self.config_dir / "persona-local.md"
+
+    @property
     def notes_root(self) -> Path:
         raw = self.notes_dir.strip()
         if not raw:
@@ -138,9 +150,37 @@ class ConfigError(Exception):
     pass
 
 
+# profile = "local" changes these defaults; a value set in config.toml still wins. A phone
+# reads its prompt at about 9 tokens a second, so history and tool output are kept small,
+# waits are long, and compaction (a long summary call on the same slow model) is off. A
+# local server needs no key.
+LOCAL_DEFAULTS = {
+    "provider": "openai",
+    "base_url": "http://127.0.0.1:8081/v1",
+    "model": "local",
+    # Thinking on Qwen3.5-0.8B: 22 of 30 checks passed on bench scenarios never used for tuning,
+    # against 15 of 50 without it, for about 190 output tokens a model call instead of 27
+    # (some 35 s more per call on the phone). Temperature follows it (apply_profile).
+    "thinking": True,
+    "api_key_env": "",
+    "api_key_file": "local.key",
+    "max_tokens": 1536,
+    "max_tokens_limit": 2048,
+    "request_timeout": 900.0,
+    "request_deadline": 1800.0,
+    "api_max_retries": 1,
+    "autorecover_cycles": 0,
+    "compaction": False,
+    "max_iterations": 6,
+    "tool_output_chars": 2000,
+    "history_chars": 8000,
+}
+
+
 def load_settings() -> Settings:
     s = Settings()
     path = s.config_dir / "config.toml"
+    data: dict = {}
     if path.exists():
         try:
             data = tomllib.loads(path.read_text(encoding="utf-8"))
@@ -155,6 +195,9 @@ def load_settings() -> Settings:
             if not ok:
                 raise ConfigError(f"setting {key!r} in {path} should be {type(current).__name__}")
             setattr(s, key, type(current)(value))
+    if s.profile not in ("full", "local"):
+        raise ConfigError(f"profile in {path} must be \"full\" or \"local\"")
+    apply_profile(s, set(data))
     if s.skill_approval not in ("ask", "off"):
         raise ConfigError(f"skill_approval in {path} must be \"ask\" or \"off\"")
     if s.provider not in ("deepseek", "openai"):
@@ -178,8 +221,21 @@ def load_settings() -> Settings:
     return s
 
 
+def apply_profile(s: Settings, given: set[str]) -> None:
+    """Fill in the local profile's defaults for every setting not in `given`."""
+    if s.profile == "local":
+        for key, value in LOCAL_DEFAULTS.items():
+            if key not in given:
+                setattr(s, key, value)
+        if "temperature" not in given:
+            # Qwen's advice for thinking; without it, low was best for tool choice on
+            # Qwen3.5-0.8B (53 of 64 first calls right at 0.2, 46 at 0.7).
+            s.temperature = 0.6 if s.thinking else 0.2
+
+
 def load_api_key(s: Settings) -> str:
-    """Env var wins, then the key file. Never logged or printed."""
+    """Env var wins, then the key file. Never logged or printed. The local profile may run
+    without a key (llama-server needs none unless started with --api-key): "" then."""
     key = os.environ.get(s.api_key_env, "").strip() if s.api_key_env else ""
     if key:
         return key
@@ -190,6 +246,8 @@ def load_api_key(s: Settings) -> str:
         key = ""
     except OSError as e:
         raise ConfigError(f"could not read key file {path}: {e}") from e
+    if not key and s.profile == "local":
+        return ""
     if not key:
         hint = f" or set {s.api_key_env}" if s.api_key_env else ""
         raise ConfigError(f"no API key. Put it in {path} (chmod 600){hint}.")

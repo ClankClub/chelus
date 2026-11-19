@@ -106,13 +106,21 @@ def approval_ok(answer: object) -> bool:
 
 
 def load_persona(s: Settings) -> str:
-    if s.persona_path.exists():
-        return s.persona_path.read_text(encoding="utf-8").strip()
-    return resources.files("chelus").joinpath("persona_default.md").read_text(encoding="utf-8").strip()
+    """The owner's persona file if there is one, else the built-in one. The local profile
+    has its own pair (persona-local.md), since a full persona costs a small model dearly."""
+    local = s.profile == "local"
+    path = s.persona_local_path if local else s.persona_path
+    if path.exists():
+        return path.read_text(encoding="utf-8").strip()
+    name = "persona_local.md" if local else "persona_default.md"
+    return resources.files("chelus").joinpath(name).read_text(encoding="utf-8").strip()
 
 
 def disabled_tools(s: Settings, store: Store | None = None) -> tuple[str, ...]:
-    """Tools switched off by config, or unavailable here (session search needs FTS5)."""
+    """Tools switched off by config, or unavailable here (session search needs FTS5). The
+    local profile offers only the core tools in tools.LOCAL."""
+    if s.profile == "local":
+        return tuple(n for n in tools.TOOLS if n not in tools.LOCAL)
     off = []
     if not s.memory:
         off.append("memory")
@@ -130,6 +138,8 @@ def system_prompt(s: Settings, guest: bool = False, skills_index: str | None = N
     """Byte-stable for a given config, frozen skill index and frozen memory snapshot:
     nothing here may change between turns (no clock), or DeepSeek's prefix cache misses on
     the whole history. Order follows Hermes: identity and rules, then skills, then memory."""
+    if s.profile == "local":
+        return local_prompt(s, guest)
     names = tools.available(guest)
     risky = ", ".join(n for n in names if tools.TOOLS[n].risky)
     prompt = (
@@ -157,6 +167,23 @@ def system_prompt(s: Settings, guest: bool = False, skills_index: str | None = N
     kept = notes.prompt_section(notes_shape if s.notes else None)
     if kept:
         prompt += "\n\n" + kept
+    return prompt
+
+
+def local_prompt(s: Settings, guest: bool = False) -> str:
+    """The local profile's prompt: the persona and the approval rule, nothing that changes
+    (no skills, memory or notes), so llama-server's cache of it stays good across turns.
+
+    Short on purpose. On Qwen3.5-0.8B every extra line tried (the working directory, the
+    timestamp note, "don't say you can't access the phone") made tool use worse, some
+    sharply (docs/LOCAL.md)."""
+    names = tools.available(guest, disabled_tools(s))
+    risky = " and ".join(n for n in names if tools.TOOLS[n].risky)
+    prompt = load_persona(s)
+    if guest:
+        return prompt + "\nYou are talking with a guest the owner invited, not the owner. Risky tools are off for guests."
+    if risky:
+        prompt += f"\nThe owner approves {risky} before they run. If the owner says no, do not try again."
     return prompt
 
 
@@ -311,8 +338,10 @@ class Agent:
 
     @property
     def reviews(self) -> bool:
-        """Whether this conversation feeds the background skill review: owner only."""
-        return not self.guest and self.actor == "foreground" and self.s.review_interval > 0
+        """Whether this conversation feeds the background skill review: owner only, and not
+        on the local profile, which has no skills."""
+        return (not self.guest and self.actor == "foreground" and self.s.review_interval > 0
+                and self.s.profile == "full")
 
     def run_turn(self, user_text: str, api_text: str | None = None, step_limit: int | None = None,
                   image_data_url: str | None = None) -> str:
@@ -420,8 +449,8 @@ class Agent:
         cache) whenever the library or memory did. They are refreshed only when compaction
         has already rewritten the history, as Hermes does. Memory written meanwhile is on
         disk at once and in the conversation as the tool call that wrote it."""
-        if self.guest:
-            self.system = system_prompt(self.s, True)
+        if self.guest or self.s.profile == "local":
+            self.system = system_prompt(self.s, self.guest)
             return
         try:
             current = skills.discover(skills.root(self.s))
@@ -462,7 +491,8 @@ class Agent:
     def _check_memory_review_due(self) -> None:
         """Count owner messages toward the memory review (Hermes: every 10 user turns). A
         turn in which the model saved to memory itself resets the count."""
-        if self.guest or self.actor != "foreground" or not self.s.memory or self.s.memory_review_interval <= 0:
+        if (self.guest or self.actor != "foreground" or not self.s.memory or self.s.memory_review_interval <= 0
+                or self.s.profile != "full"):
             return
         try:
             turns = 0 if "memory" in self.tools_ok else int(self.store.session_field(self.session_id, "memory_turns") or 0) + 1
@@ -547,7 +577,7 @@ class Agent:
     # ---- the loop ----
 
     def _loop(self, history: list[dict[str, Any]], turn: list[dict[str, Any]]) -> str:
-        schemas = tools.schemas(self.tool_names)
+        schemas = tools.schemas(self.tool_names, compact=self.s.profile == "local")
         guard = guardrails.Guard(self.hard_stop)
         self._history, self._turn = history, turn
         parts: list[str] = []  # text fragments of a reply cut off by max_tokens

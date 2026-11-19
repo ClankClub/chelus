@@ -6,7 +6,7 @@
 
 > Chelus is a small, persistent AI agent built to do more with less. It runs on a Samsung Galaxy A10e using 32-bit Android/Termux, in an environment too constrained for many modern agent stacks.
 
-The core agent loop, tools, conversation history, memory, notes, skills, scheduled jobs and Telegram bridge run **on the phone**, using Python's **standard library only** (no pip dependencies). Model inference happens remotely, through DeepSeek or any OpenAI-compatible API; optional services and command-line tools can extend the agent without becoming core dependencies. The goal is a capable, inspectable agent for constrained computers—not a model running inference locally, and not a 32-bit-only Python codebase.
+The core agent loop, tools, conversation history, memory, notes, skills, scheduled jobs and Telegram bridge run **on the phone**, using Python's **standard library only** (no pip dependencies). Model inference happens remotely, through DeepSeek or any OpenAI-compatible API; optional services and command-line tools can extend the agent without becoming core dependencies. The goal is a capable, inspectable agent for constrained computers, not a 32-bit-only Python codebase. An experimental [local profile](docs/LOCAL.md) runs a tiny model on the phone itself through llama.cpp, with five tools and a short prompt; it works, slowly and with a small model's mistakes.
 
 The project adapts ideas from [Hermes Agent](https://github.com/NousResearch/hermes-agent) for hardware that cannot install its usual dependencies. Chelus is independent of Nous Research. See [NOTICE](NOTICE) for attribution.
 
@@ -19,7 +19,7 @@ The project adapts ideas from [Hermes Agent](https://github.com/NousResearch/her
 ## Requirements
 
 - [Termux](https://termux.dev/) with Python 3.11 or newer (tested with 3.14.8 on armv8l).
-- An API key for model inference: DeepSeek by default, or any OpenAI-compatible API (see [Configuration](#configuration)).
+- An API key for model inference: DeepSeek by default, or any OpenAI-compatible API (see [Configuration](#configuration)). The experimental [local profile](docs/LOCAL.md) needs none, but needs llama.cpp and a model file on the phone.
 - Optional for the `battery_status` tool: the Termux `termux-api` package and the Termux:API app.
 
 **Node.js is not required to run Chelus.** It is installed separately on the owner's phone to support optional tooling, including the Vercel CLI. Likewise, cloud accounts, ADB, and other external CLIs/APIs are enhancements, not runtime dependencies. Other Linux/Python environments are a portability goal, not yet a tested support matrix.
@@ -210,6 +210,8 @@ model = "openai/gpt-oss-20b"
 api_key_env = "OPENROUTER_API_KEY"   # read first
 api_key_file = "openrouter.key"      # then this file in ~/.config/chelus
 ```
+
+**On-phone model (experimental).** `profile = "local"` points Chelus at a `llama-server` on `127.0.0.1:8081` and trims it for a tiny model: five tools (`list_dir`, `read_file`, `write_file`, `run_shell`, `battery_status`) with short schemas, a short prompt (`~/.config/chelus/persona-local.md` replaces it), thinking on, small history, long timeouts, and no key. Skills, memory, notes, web, scheduling tools and the background reviews are off; risky tools still ask. Setup, measurements and limits: [docs/LOCAL.md](docs/LOCAL.md).
 
 The defaults and full set of supported keys are in [chelus/config.py](chelus/config.py); unknown keys or wrong types are errors. `CHELUS_CONFIG_DIR`, `CHELUS_DATA_DIR` and `CHELUS_CACHE_DIR` (default `~/.cache/chelus`) override the respective directories. Chelus was called Chelys until 2026-10-28: on first start, `~/.config/chelys` and `~/.local/share/chelys` are moved to their `chelus` names and a symlink is left at the old path, and `CHELYS_CONFIG_DIR` / `CHELYS_DATA_DIR` are still honored. Customize the agent's personality with `~/.config/chelus/persona.md`; otherwise it uses [the default persona](chelus/persona_default.md).
 
